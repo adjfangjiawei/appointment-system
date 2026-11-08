@@ -1,0 +1,31 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+dist/
+
+# Compiled binaries & libraries
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+compile_commands.json
+
+# Runtime databases & logs
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.log
