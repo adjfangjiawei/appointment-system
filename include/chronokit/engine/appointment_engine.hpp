@@ -2,6 +2,7 @@
 
 #include "chronokit/bricks/brick.hpp"
 #include "chronokit/bricks/builtin_bricks.hpp"
+#include "chronokit/bricks/v3_bricks.hpp"
 #include "chronokit/core/event_bus.hpp"
 #include "chronokit/core/types.hpp"
 #include "chronokit/lua/lua_vm.hpp"
@@ -32,6 +33,9 @@ public:
     static std::vector<BrickDescriptor> available_brick_catalog();
     BlueprintSpec current_blueprint_info() const;
 
+    // Code Generation: Export active pipeline into ready-to-compile C++20 EngineBuilder code!
+    std::string export_cpp_builder_code() const;
+
     // Resource & Actor CRUD
     void upsert_resource(const Resource& r);
     std::optional<Resource> get_resource(const std::string& id) const;
@@ -41,9 +45,25 @@ public:
     std::optional<Actor> get_actor(const std::string& id) const;
     std::vector<Actor> list_actors() const;
 
-    // Core Booking Operations
+    // Core & v3 Lifecycle Booking Operations
     BookingOutcome book(const BookingRequest& req);
     RecurringOutcome book_recurring(const RecurringRequest& req);
+
+    // Two-phase seat hold confirmation (PENDING_PAYMENT -> CONFIRMED)
+    BookingOutcome confirm_payment(
+        const std::string& booking_id,
+        const std::string& actor_id,
+        std::optional<EpochMinute> now_opt = std::nullopt);
+
+    // Atomic reschedule (改签: preserves original booking on failure; promotes old slot waitlist on success!)
+    BookingOutcome reschedule_booking(const RescheduleRequest& req);
+
+    // Atomic peer-to-peer transfer (转赠/代班移交: validates recipient RBAC, credit, quota & conflicts!)
+    BookingOutcome transfer_booking(
+        const std::string& booking_id,
+        const std::string& from_actor_id,
+        const std::string& to_actor_id,
+        std::optional<EpochMinute> now_opt = std::nullopt);
 
     BookingOutcome cancel_booking(
         const std::string& booking_id,
@@ -64,12 +84,21 @@ public:
         const std::string& actor_id,
         std::optional<EpochMinute> now_opt = std::nullopt);
 
+    // Check-out with early-release waitlist promotion & overstay overtime fee settlement
+    BookingOutcome check_out_booking(
+        const std::string& booking_id,
+        const std::string& actor_id,
+        std::optional<EpochMinute> now_opt = std::nullopt,
+        double overtime_rate_multiplier = 1.5);
+
     BookingOutcome complete_booking(
         const std::string& booking_id,
         std::optional<EpochMinute> now_opt = std::nullopt);
 
-    // Autonomous Lifecycle, Fault Auto-Reallocation & Smart Recommendations
+    // Autonomous Lifecycle Sweeps, Fault Auto-Reallocation & Smart Recommendations
     std::vector<std::string> sweep_no_shows(EpochMinute now);
+    std::vector<std::string> sweep_expired_holds(EpochMinute now);
+
     FaultReportResult report_resource_fault(
         const std::string& resource_id,
         std::optional<EpochMinute> now_opt = std::nullopt,
@@ -86,9 +115,10 @@ public:
         size_t max_results = 8,
         std::optional<EpochMinute> now_opt = std::nullopt);
 
-    // Queries, Observability & Logs
+    // Queries, Timeline Matrix, Observability & Logs
     std::optional<BookingRecord> get_booking(const std::string& id) const;
     std::vector<BookingRecord> list_bookings() const;
+    JsonValue timeline_matrix(const std::string& date_str) const;
     std::vector<DomainEvent> recent_events(size_t limit = 50) const { return event_bus_.recent_events(limit); }
     std::vector<std::string> recent_lua_logs(size_t limit = 50) const;
     JsonValue stats_summary() const;
@@ -100,7 +130,6 @@ public:
 private:
     mutable std::recursive_mutex mu_;
     std::shared_ptr<IStorage> storage_;
-    // Note: lua_vm_ declared BEFORE bricks_ so bricks_ (including LuaScriptBrick) destruct FIRST!
     std::shared_ptr<LuaVM> lua_vm_;
     std::vector<BrickPtr> bricks_;
     BlueprintSpec active_bp_;

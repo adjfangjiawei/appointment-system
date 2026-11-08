@@ -1,5 +1,6 @@
 #include "chronokit/lua/lua_vm.hpp"
 #include "chronokit/bricks/builtin_bricks.hpp"
+#include "chronokit/bricks/v3_bricks.hpp"
 #include "chronokit/lua/lua_brick.hpp"
 
 extern "C" {
@@ -60,7 +61,7 @@ bool is_lua_array(lua_State* L, int abs_idx, size_t& max_idx) {
         ++count;
         lua_pop(L, 1);
     }
-    return count == max_idx; // Dense 1..N array (empty table -> count=0, max=0 -> true? Handle empty as object or array)
+    return count == max_idx;
 }
 
 } // namespace
@@ -92,7 +93,6 @@ void LuaVM::init_sandbox_and_dsl() {
     std::lock_guard<std::recursive_mutex> lk(mu_);
     StackGuard guard(L_);
 
-    // Open safe standard libraries (exclude io/os/package.loadlib for safe sandboxed execution)
     luaL_requiref(L_, "_G", luaopen_base, 1);
     lua_pop(L_, 1);
     luaL_requiref(L_, LUA_TABLIBNAME, luaopen_table, 1);
@@ -104,13 +104,11 @@ void LuaVM::init_sandbox_and_dsl() {
     luaL_requiref(L_, LUA_UTF8LIBNAME, luaopen_utf8, 1);
     lua_pop(L_, 1);
 
-    // Disable dofile/loadfile from untrusted scripts while keeping pure DSL evaluation
     lua_pushnil(L_);
     lua_setglobal(L_, "dofile");
     lua_pushnil(L_);
     lua_setglobal(L_, "loadfile");
 
-    // Bind `log(...)` and `print(...)` to engine log ring buffer
     lua_pushlightuserdata(L_, this);
     lua_pushcclosure(L_, lua_host_log, 1);
     lua_setglobal(L_, "log");
@@ -119,7 +117,7 @@ void LuaVM::init_sandbox_and_dsl() {
     lua_pushcclosure(L_, lua_host_log, 1);
     lua_setglobal(L_, "print");
 
-    // Inject ChronoKit Declarative Composable DSL (`Blueprint` and `Brick.<Type>`)
+    // Inject ChronoKit v3.0 Declarative Composable DSL (`Blueprint`, `Brick.*`, and `Prefab.*` Reusable Suites)
     const char* prelude = R"LUA(
         Brick = setmetatable({}, {
             __index = function(_, brick_type)
@@ -130,6 +128,51 @@ void LuaVM::init_sandbox_and_dsl() {
                 end
             end
         })
+
+        Prefab = {
+            -- 可复用预制件模组 1：防黄牛风控与防连占冷却组合包
+            AntiScalperSuite = function(opts)
+                opts = opts or {}
+                return Brick.AllOf {
+                    name = opts.name or "AntiScalperSuite",
+                    order = opts.order or 28,
+                    bricks = {
+                        Brick.AntiScalper {
+                            max_cancellations_per_day = opts.max_cancels or 2,
+                            max_creates_in_window = opts.max_burst or 4,
+                            window_minutes = opts.window_minutes or 60,
+                            require_verified_attribute = opts.verified_attr or "",
+                        },
+                        Brick.CooldownInterval {
+                            min_gap_same_resource_minutes = opts.cooldown_minutes or 60,
+                            min_gap_same_kind_minutes = opts.kind_cooldown_minutes or 0,
+                        }
+                    }
+                }
+            end,
+
+            -- 可复用预制件模组 2：信用准入与履约奖惩套件
+            CreditGuardSuite = function(opts)
+                opts = opts or {}
+                return Brick.AllOf {
+                    name = opts.name or "CreditGuardSuite",
+                    order = opts.order or 30,
+                    bricks = {
+                        Brick.RoleAndCreditGate {
+                            min_credit_score = opts.min_credit or 65,
+                            deduct_on_no_show = opts.deduct or 15,
+                            reward_on_complete = opts.reward or 3,
+                        },
+                        Brick.CancellationAndCheckIn {
+                            free_cancel_before_minutes = opts.free_cancel_mins or 60,
+                            late_cancel_fee_ratio = opts.cancel_fee or 0.3,
+                            check_in_earliest_before_minutes = opts.checkin_before or 30,
+                            check_in_grace_after_minutes = opts.grace_mins or 15,
+                        }
+                    }
+                }
+            end
+        }
 
         function Blueprint(spec)
             spec = spec or {}
@@ -180,7 +223,6 @@ JsonValue LuaVM::lua_to_json(lua_State* L, int index) {
             return JsonValue(std::string(s ? s : "", len));
         }
         case LUA_TTABLE: {
-            // Check if table is empty -> default to Object (works seamlessly for JSON configs; arrays check both)
             lua_pushnil(L);
             if (lua_next(L, abs_idx) == 0) {
                 return JsonValue::object();
@@ -247,6 +289,93 @@ void LuaVM::json_to_lua(lua_State* L, const JsonValue& val) {
     } else {
         lua_pushnil(L);
     }
+}
+
+BrickPtr LuaVM::parse_single_brick(int brick_tbl_idx) {
+    StackGuard guard(L_);
+    int b_idx = lua_absindex(L_, brick_tbl_idx);
+    if (!lua_istable(L_, b_idx)) {
+        throw std::runtime_error("Expected table when parsing Brick definition");
+    }
+
+    JsonValue b_cfg = lua_to_json(L_, b_idx);
+    std::string b_type = b_cfg["_brick_type"].as_string(b_cfg["type"].as_string());
+
+    // 1. Recursive Higher-Order Combinator: Brick.When
+    if (b_type == "When") {
+        std::string name = b_cfg["name"].as_string("Branch");
+        int ord = static_cast<int>(b_cfg["order"].as_int(55));
+        JsonValue cond = b_cfg.contains("condition") ? b_cfg["condition"] : b_cfg;
+
+        BrickPtr then_b;
+        lua_getfield(L_, b_idx, "then_brick");
+        if (lua_istable(L_, -1)) then_b = parse_single_brick(lua_gettop(L_));
+        lua_pop(L_, 1);
+
+        BrickPtr else_b;
+        lua_getfield(L_, b_idx, "else_brick");
+        if (lua_istable(L_, -1)) else_b = parse_single_brick(lua_gettop(L_));
+        lua_pop(L_, 1);
+
+        return std::make_shared<WhenBrick>(name, ord, cond, std::move(then_b), std::move(else_b));
+    }
+
+    // 2. Recursive Higher-Order Combinators: Brick.AnyOf / Brick.AllOf
+    if (b_type == "AnyOf" || b_type == "AllOf") {
+        std::string name = b_cfg["name"].as_string(b_type == "AnyOf" ? "OrGate" : "PrefabGroup");
+        int ord = static_cast<int>(b_cfg["order"].as_int(b_type == "AnyOf" ? 30 : 50));
+        std::vector<BrickPtr> children;
+
+        lua_getfield(L_, b_idx, "bricks");
+        if (lua_istable(L_, -1)) {
+            int arr_idx = lua_gettop(L_);
+            lua_Integer n = luaL_len(L_, arr_idx);
+            for (lua_Integer i = 1; i <= n; ++i) {
+                lua_rawgeti(L_, arr_idx, i);
+                if (lua_istable(L_, -1)) {
+                    children.push_back(parse_single_brick(lua_gettop(L_)));
+                }
+                lua_pop(L_, 1);
+            }
+        }
+        lua_pop(L_, 1);
+
+        if (b_type == "AnyOf") return std::make_shared<AnyOfBrick>(name, ord, std::move(children));
+        return std::make_shared<AllOfBrick>(name, ord, std::move(children));
+    }
+
+    // 3. LuaPolicy Script Brick
+    auto grab_fn_ref = [&](const char* fn_name) -> int {
+        lua_getfield(L_, b_idx, fn_name);
+        if (lua_isfunction(L_, -1)) {
+            return luaL_ref(L_, LUA_REGISTRYINDEX);
+        }
+        lua_pop(L_, 1);
+        return LUA_NOREF;
+    };
+
+    int pre_book_ref = grab_fn_ref("on_pre_book");
+    int pre_cancel_ref = grab_fn_ref("on_pre_cancel");
+    int pre_checkin_ref = grab_fn_ref("on_pre_check_in");
+
+    if (b_type == "LuaPolicy" || pre_book_ref != LUA_NOREF ||
+        pre_cancel_ref != LUA_NOREF || pre_checkin_ref != LUA_NOREF)
+    {
+        std::string cname = b_cfg["name"].as_string("LuaCustomPolicy");
+        std::string summary = b_cfg["description"].as_string("Lua 动态业务规则与自定义计价/准入扩展积木");
+        int ord = static_cast<int>(b_cfg["order"].as_int(60));
+        std::shared_ptr<LuaVM> non_owning_vm(this, [](LuaVM*) {});
+        return std::make_shared<LuaScriptBrick>(
+            non_owning_vm, cname, summary, ord,
+            pre_book_ref, pre_cancel_ref, pre_checkin_ref, b_cfg);
+    }
+
+    // 4. Native C++ Brick from BrickRegistry
+    auto native_brick = BrickRegistry::instance().create(b_type, b_cfg);
+    if (!native_brick) {
+        throw std::runtime_error("Unknown Brick type in Lua blueprint: '" + b_type + "'");
+    }
+    return native_brick;
 }
 
 BlueprintSpec LuaVM::load_blueprint_file(const std::string& path) {
@@ -326,28 +455,17 @@ BlueprintSpec LuaVM::parse_blueprint_table(int table_idx, const std::string& src
         spec.fault_policy.compensate_priority = static_cast<int>(fp["compensate_priority"].as_int(30));
     }
 
-    // Parse seed resources
     if (bp_json.contains("resources") && bp_json["resources"].is_array()) {
         for (const auto& r_j : bp_json["resources"].as_array()) {
             spec.seed_resources.push_back(Resource::from_json(r_j));
         }
     }
 
-    // Parse seed actors
     if (bp_json.contains("actors") && bp_json["actors"].is_array()) {
         for (const auto& a_j : bp_json["actors"].as_array()) {
             spec.seed_actors.push_back(Actor::from_json(a_j));
         }
     }
-
-    // Parse composable Bricks array (supports both native C++ Bricks and LuaPolicy bricks!)
-    // Notice we borrow a non-owning shared_ptr alias or keep LuaScriptBrick holding raw/weak?
-    // Wait: AppointmentEngine owns shared_ptr<LuaVM>, so we can pass shared_ptr<LuaVM> when constructing!
-    // Even cleaner: here we create a non-owning shared_ptr or let LuaVM inherit enable_shared_from_this!
-    // Wait: let's check how LuaScriptBrick accesses LuaVM: we can pass `std::shared_ptr<LuaVM>` if `LuaVM : public std::enable_shared_from_this<LuaVM>`!
-    // Wait — let's check if LuaVM is always held in a shared_ptr: if someone constructs LuaVM on stack in a test, enable_shared_from_this::shared_from_this() would throw unless held in shared_ptr!
-    // Instead, LuaScriptBrick can hold `LuaVM*` directly (since AppointmentEngine owns both LuaVM and Pipeline, and destroys Pipeline BEFORE LuaVM!), OR let's check lifecycle!
-    // Let's make sure: if AppointmentEngine destroys bricks_ BEFORE lua_vm_, `LuaVM*` is 100% valid throughout every brick's lifetime! Let's still be extra safe and check `vm_->state() != nullptr`.
 
     lua_getfield(L_, abs_bp, "bricks");
     if (lua_istable(L_, -1)) {
@@ -356,50 +474,13 @@ BlueprintSpec LuaVM::parse_blueprint_table(int table_idx, const std::string& src
         for (lua_Integer i = 1; i <= len; ++i) {
             lua_rawgeti(L_, bricks_tbl, i);
             if (lua_istable(L_, -1)) {
-                int b_idx = lua_gettop(L_);
-                JsonValue b_cfg = lua_to_json(L_, b_idx);
-                std::string b_type = b_cfg["_brick_type"].as_string(b_cfg["type"].as_string());
-
-                // Check if this brick has Lua function callbacks
-                auto grab_fn_ref = [&](const char* fn_name) -> int {
-                    lua_getfield(L_, b_idx, fn_name);
-                    if (lua_isfunction(L_, -1)) {
-                        return luaL_ref(L_, LUA_REGISTRYINDEX); // pops function
-                    }
-                    lua_pop(L_, 1);
-                    return LUA_NOREF;
-                };
-
-                int pre_book_ref = grab_fn_ref("on_pre_book");
-                int pre_cancel_ref = grab_fn_ref("on_pre_cancel");
-                int pre_checkin_ref = grab_fn_ref("on_pre_check_in");
-
-                if (b_type == "LuaPolicy" || pre_book_ref != LUA_NOREF ||
-                    pre_cancel_ref != LUA_NOREF || pre_checkin_ref != LUA_NOREF)
-                {
-                    std::string cname = b_cfg["name"].as_string("LuaCustomPolicy");
-                    std::string summary = b_cfg["description"].as_string("Lua 动态业务规则与自定义计价/准入扩展积木");
-                    int ord = static_cast<int>(b_cfg["order"].as_int(60));
-                    // Non-owning shared_ptr wrapper to `this` so LuaScriptBrick works whether LuaVM is on stack or heap
-                    std::shared_ptr<LuaVM> non_owning_vm(this, [](LuaVM*) {});
-                    spec.bricks.push_back(std::make_shared<LuaScriptBrick>(
-                        non_owning_vm, cname, summary, ord,
-                        pre_book_ref, pre_cancel_ref, pre_checkin_ref, b_cfg));
-                } else {
-                    auto native_brick = BrickRegistry::instance().create(b_type, b_cfg);
-                    if (!native_brick) {
-                        lua_pop(L_, 2);
-                        throw std::runtime_error("Unknown Brick type in Lua blueprint: '" + b_type + "'");
-                    }
-                    spec.bricks.push_back(std::move(native_brick));
-                }
+                spec.bricks.push_back(parse_single_brick(lua_gettop(L_)));
             }
             lua_pop(L_, 1);
         }
     }
     lua_pop(L_, 1);
 
-    // Parse domain event hooks table (`hooks = { on_book = function(ev) ... end, ... }`)
     clear_hook_refs();
     lua_getfield(L_, abs_bp, "hooks");
     if (lua_istable(L_, -1)) {
@@ -408,7 +489,7 @@ BlueprintSpec LuaVM::parse_blueprint_table(int table_idx, const std::string& src
         while (lua_next(L_, hooks_tbl) != 0) {
             if (lua_type(L_, -2) == LUA_TSTRING && lua_isfunction(L_, -1)) {
                 std::string h_name = lua_tostring(L_, -2);
-                int ref = luaL_ref(L_, LUA_REGISTRYINDEX); // pops value
+                int ref = luaL_ref(L_, LUA_REGISTRYINDEX);
                 hook_refs_[h_name] = ref;
             } else {
                 lua_pop(L_, 1);

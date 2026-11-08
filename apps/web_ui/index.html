@@ -1,24 +1,25 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>ChronoKit Studio — C++20 × Lua 5.4 可组合预约系统引擎工作台</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChronoKit Studio v3.0 — 时序积木可组合预约组件工作台</title>
 <style>
   :root {
-    --bg: #0b0f19;
-    --panel: #131929;
-    --panel-alt: #192236;
-    --border: #26334d;
-    --text: #e6edf7;
-    --muted: #8fa1c2;
-    --accent: #3b82f6;
-    --accent-glow: rgba(59, 130, 246, 0.22);
-    --green: #10b981;
+    --bg: #0b1020;
+    --panel: #131b31;
+    --panel-alt: #192340;
+    --border: #27355c;
+    --text: #e8eefc;
+    --muted: #93a4c8;
+    --accent: #4f8cff;
+    --accent-hover: #3a78f0;
+    --green: #22c55e;
     --amber: #f59e0b;
     --red: #ef4444;
-    --purple: #8b5cf6;
+    --purple: #a855f7;
     --cyan: #06b6d4;
+    --pink: #ec4899;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -26,308 +27,288 @@
     background: var(--bg);
     color: var(--text);
     line-height: 1.5;
-    min-height: 100vh;
+    padding-bottom: 40px;
   }
   header {
-    background: linear-gradient(180deg, #131c31 0%, #0e1424 100%);
+    background: linear-gradient(90deg, #101935 0%, #192852 100%);
     border-bottom: 1px solid var(--border);
-    padding: 14px 24px;
+    padding: 14px 22px;
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
     justify-content: space-between;
-    gap: 12px;
-  }
-  .brand {
-    display: flex;
     align-items: center;
     gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
   }
-  .logo-badge {
-    width: 38px;
-    height: 38px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 800;
-    font-size: 18px;
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.35);
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo-cube {
+    width: 38px; height: 38px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    display: grid; place-items: center;
+    font-weight: 800; font-size: 18px; color: #fff;
+    box-shadow: 0 4px 14px rgba(79,140,255,0.35);
   }
   .brand h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.3px; }
   .brand p { font-size: 12px; color: var(--muted); }
-  .preset-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  .preset-btn {
-    background: var(--panel-alt);
+  .blueprint-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  select, input, textarea {
+    background: #0d1428;
     color: var(--text);
     border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    outline: none;
+  }
+  select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
     padding: 7px 13px;
-    border-radius: 8px;
     font-size: 12.5px;
+    font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
   }
-  .preset-btn:hover { border-color: var(--accent); background: #1e2b45; }
-  .preset-btn.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    font-weight: 600;
-    box-shadow: 0 0 14px var(--accent-glow);
-  }
-  .container {
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 18px 22px 40px;
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-  }
-  .stats-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
-    gap: 12px;
-  }
+  button:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  button.secondary { background: var(--panel-alt); border: 1px solid var(--border); color: var(--text); }
+  button.secondary:hover { border-color: var(--accent); background: #212e52; }
+  button.danger { background: rgba(239,68,68,0.16); color: #fca5a5; border: 1px solid rgba(239,68,68,0.4); }
+  button.danger:hover { background: rgba(239,68,68,0.28); }
+  button.success { background: rgba(34,197,94,0.18); color: #86efac; border: 1px solid rgba(34,197,94,0.4); }
+  button.warn { background: rgba(245,158,11,0.18); color: #fcd34d; border: 1px solid rgba(245,158,11,0.4); }
+  button.purple { background: rgba(168,85,247,0.2); color: #e9d5ff; border: 1px solid rgba(168,85,247,0.45); }
+  button.sm { padding: 3px 8px; font-size: 11.5px; }
+
+  .container { max-width: 1520px; margin: 16px auto; padding: 0 18px; display: flex; flex-direction: column; gap: 16px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 11px; }
   .stat-card {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 13px 16px;
+    padding: 12px 15px;
   }
-  .stat-card .label { font-size: 12px; color: var(--muted); }
-  .stat-card .val { font-size: 22px; font-weight: 700; margin-top: 3px; }
-  .stat-card .sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .stat-card .label { font-size: 11.5px; color: var(--muted); }
+  .stat-card .val { font-size: 21px; font-weight: 700; margin-top: 3px; }
+  .stat-card .sub { font-size: 11px; color: var(--cyan); margin-top: 2px; }
+
+  .main-grid { display: grid; grid-template-columns: 450px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 1120px) { .main-grid { grid-template-columns: 1fr; } }
 
   .card {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px 18px;
-  }
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    gap: 10px;
-    flex-wrap: wrap;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 16px;
   }
   .card-title {
-    font-size: 15px;
+    font-size: 14.5px;
     font-weight: 700;
+    margin-bottom: 11px;
     display: flex;
+    justify-content: space-between;
     align-items: center;
     gap: 8px;
   }
   .badge {
     display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 99px;
+    font-size: 10.5px;
     font-weight: 600;
   }
-  .b-blue { background: rgba(59,130,246,0.18); color: #60a5fa; border: 1px solid rgba(59,130,246,0.35); }
-  .b-green { background: rgba(16,185,129,0.18); color: #34d399; border: 1px solid rgba(16,185,129,0.35); }
-  .b-amber { background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); }
-  .b-red { background: rgba(239,68,68,0.18); color: #f87171; border: 1px solid rgba(239,68,68,0.35); }
-  .b-purple { background: rgba(139,92,246,0.18); color: #c084fc; border: 1px solid rgba(139,92,246,0.35); }
-  .b-cyan { background: rgba(6,182,212,0.18); color: #22d3ee; border: 1px solid rgba(6,182,212,0.35); }
+  .cat-Temporal { background: rgba(6,182,212,0.18); color: #67e8f9; }
+  .cat-Access { background: rgba(168,85,247,0.18); color: #d8b4fe; }
+  .cat-Quota { background: rgba(245,158,11,0.18); color: #fcd34d; }
+  .cat-Pricing { background: rgba(34,197,94,0.18); color: #86efac; }
+  .cat-Capacity { background: rgba(79,140,255,0.18); color: #93c5fd; }
+  .cat-Workflow { background: rgba(244,63,94,0.18); color: #fda4af; }
+  .cat-Combinator { background: rgba(236,72,153,0.22); color: #f9a8d4; border: 1px solid rgba(236,72,153,0.45); }
+  .cat-Lua { background: rgba(99,102,241,0.25); color: #c7d2fe; border: 1px solid #6366f1; }
 
-  /* LEGO Pipeline Chain */
-  .pipeline-chain {
-    display: flex;
-    align-items: stretch;
-    gap: 10px;
-    overflow-x: auto;
-    padding-bottom: 8px;
-  }
+  .pipeline-list { display: flex; flex-direction: column; gap: 8px; }
   .brick-node {
-    min-width: 175px;
-    max-width: 210px;
     background: var(--panel-alt);
     border: 1px solid var(--border);
-    border-top: 3px solid var(--accent);
-    border-radius: 10px;
-    padding: 10px 12px;
-    cursor: pointer;
-    transition: transform 0.14s, border-color 0.14s;
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 9px 11px;
     position: relative;
-    flex-shrink: 0;
   }
-  .brick-node:hover { transform: translateY(-2px); border-color: #60a5fa; }
-  .brick-node[data-cat="Time"] { border-top-color: var(--cyan); }
-  .brick-node[data-cat="Access"] { border-top-color: var(--amber); }
-  .brick-node[data-cat="Quota"] { border-top-color: #ec4899; }
-  .brick-node[data-cat="Pricing"] { border-top-color: var(--green); }
-  .brick-node[data-cat="Lua"] { border-top-color: var(--purple); background: linear-gradient(180deg, rgba(139,92,246,0.12), var(--panel-alt)); }
-  .brick-node[data-cat="Capacity"] { border-top-color: var(--accent); }
-  .brick-node[data-cat="Workflow"] { border-top-color: #f97316; }
-  .brick-top { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-  .brick-name { font-size: 13px; font-weight: 700; word-break: break-all; margin-bottom: 4px; }
-  .brick-desc { font-size: 11.5px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-
-  .main-grid {
-    display: grid;
-    grid-template-columns: 1.05fr 1fr;
-    gap: 18px;
+  .brick-node.combinator-node { border-left-color: var(--pink); }
+  .brick-node .top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .brick-node .name { font-weight: 700; font-size: 13px; }
+  .brick-node .desc { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .brick-node .cfg {
+    margin-top: 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: #93c5fd;
+    background: #0c1224;
+    padding: 4px 7px;
+    border-radius: 4px;
+    word-break: break-all;
   }
-  @media (max-width: 1150px) {
-    .main-grid { grid-template-columns: 1fr; }
-  }
-
-  .form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-  .field { display: flex; flex-direction: column; gap: 4px; }
-  .field.full { grid-column: 1 / -1; }
-  .field label { font-size: 12px; color: var(--muted); font-weight: 500; }
-  input, select, textarea {
-    background: #0d1322;
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 8px 10px;
-    font-size: 13px;
-    font-family: inherit;
-  }
-  input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--accent);
-  }
-  .res-check-list {
+  .child-bricks {
+    margin-top: 7px;
+    padding-left: 10px;
+    border-left: 2px dashed rgba(236,72,153,0.45);
     display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-    background: #0d1322;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px;
+    flex-direction: column;
+    gap: 5px;
   }
-  .res-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 10px;
-    border-radius: 7px;
-    background: var(--panel-alt);
+  .child-brick-item {
+    background: rgba(11,16,32,0.7);
     border: 1px solid var(--border);
-    font-size: 12px;
-    cursor: pointer;
-    user-select: none;
+    border-radius: 5px;
+    padding: 5px 8px;
+    font-size: 11.5px;
   }
-  .res-chip input { margin: 0; }
-  .res-chip.fault { border-color: rgba(239,68,68,0.5); opacity: 0.65; }
 
-  .btn {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: 7px;
-    padding: 8px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.15s;
-  }
-  .btn:hover { opacity: 0.9; }
-  .btn-secondary { background: var(--panel-alt); border: 1px solid var(--border); color: var(--text); }
-  .btn-green { background: var(--green); }
-  .btn-amber { background: var(--amber); color: #111; }
-  .btn-red { background: var(--red); }
-  .btn-purple { background: var(--purple); }
-  .btn-sm { padding: 4px 9px; font-size: 11.5px; border-radius: 6px; }
-
-  .trace-box {
-    margin-top: 12px;
-    background: #0c111e;
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    padding: 12px;
-    max-height: 270px;
-    overflow-y: auto;
-  }
-  .trace-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 5px 0;
-    border-bottom: 1px dashed rgba(255,255,255,0.06);
-    font-size: 12px;
-  }
-  .trace-row:last-child { border-bottom: none; }
-  .trace-us { color: var(--muted); font-family: monospace; min-width: 62px; text-align: right; }
-
-  .lua-editor {
-    width: 100%;
-    height: 335px;
-    font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
-    font-size: 12.5px;
-    line-height: 1.5;
-    background: #090d16;
-    color: #dbeafe;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px;
-    resize: vertical;
-  }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 9px; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11.5px; color: var(--muted); }
 
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  th, td { text-align: left; padding: 8px 9px; border-bottom: 1px solid var(--border); vertical-align: middle; }
   th { color: var(--muted); font-weight: 600; font-size: 11.5px; }
-  tr:hover td { background: rgba(255,255,255,0.02); }
 
-  .res-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
-    gap: 10px;
-  }
-  .res-card {
-    background: var(--panel-alt);
+  .st-CONFIRMED { color: #86efac; font-weight: 700; }
+  .st-WAITLISTED { color: #fcd34d; font-weight: 700; }
+  .st-PENDING_APPROVAL { color: #c4b5fd; font-weight: 700; }
+  .st-PENDING_PAYMENT { color: #f9a8d4; font-weight: 700; }
+  .st-CHECKED_IN { color: #67e8f9; font-weight: 700; }
+  .st-COMPLETED { color: #93c5fd; font-weight: 700; }
+  .st-CANCELLED, .st-REJECTED, .st-NO_SHOW, .st-FAULT_DISPLACED { color: #fca5a5; }
+
+  .trace-box {
+    background: #0b1122;
     border: 1px solid var(--border);
-    border-radius: 9px;
-    padding: 11px 13px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .res-card.fault { border-color: var(--red); background: rgba(239,68,68,0.07); }
-
-  .event-list {
-    max-height: 240px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .event-item {
-    background: #0d1322;
-    border-left: 3px solid var(--accent);
-    padding: 7px 10px;
-    border-radius: 5px;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 10px;
     font-size: 12px;
   }
-  .toast {
-    position: fixed;
-    bottom: 22px;
-    right: 22px;
-    background: #1e293b;
-    border: 1px solid var(--accent);
+  .trace-step {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px dashed rgba(255,255,255,0.06);
+  }
+  .trace-step:last-child { border-bottom: none; }
+
+  textarea.lua-editor {
+    width: 100%;
+    min-height: 290px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    background: #080d1a;
+    color: #dbeafe;
+    padding: 11px;
+  }
+  .res-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 9px; }
+  .res-item {
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .res-item.fault { border-color: var(--red); background: rgba(239,68,68,0.08); }
+
+  /* Gantt Timeline Styles */
+  .gantt-wrap { display: flex; flex-direction: column; gap: 7px; margin-top: 6px; }
+  .gantt-axis {
+    display: flex;
+    margin-left: 165px;
+    justify-content: space-between;
+    font-size: 10.5px;
+    color: var(--muted);
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--border);
+  }
+  .gantt-row { display: flex; align-items: center; gap: 10px; }
+  .gantt-label {
+    width: 155px;
+    flex-shrink: 0;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gantt-track {
+    flex: 1;
+    height: 24px;
+    background: #0b1122;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    position: relative;
+    overflow: hidden;
+  }
+  .gantt-bar {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
     color: #fff;
-    padding: 11px 16px;
-    border-radius: 9px;
-    box-shadow: 0 10px 28px rgba(0,0,0,0.5);
-    font-size: 13px;
+    padding: 0 5px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .gantt-buf {
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    background: repeating-linear-gradient(45deg, rgba(245,158,11,0.22), rgba(245,158,11,0.22) 4px, transparent 4px, transparent 8px);
+    border-radius: 3px;
+    pointer-events: none;
+  }
+  .bar-CONFIRMED { background: rgba(34,197,94,0.8); }
+  .bar-PENDING_PAYMENT { background: rgba(236,72,153,0.8); }
+  .bar-PENDING_APPROVAL { background: rgba(168,85,247,0.8); }
+  .bar-CHECKED_IN { background: rgba(6,182,212,0.85); }
+  .bar-WAITLISTED { background: rgba(245,158,11,0.55); border: 1px dashed #fcd34d; }
+  .bar-COMPLETED { background: rgba(79,140,255,0.65); }
+
+  .event-feed { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+  .event-row { background: #0d1428; border-left: 3px solid var(--cyan); padding: 6px 10px; border-radius: 4px; }
+
+  /* Modal */
+  .modal-backdrop {
     display: none;
-    z-index: 999;
-    max-width: 420px;
+    position: fixed;
+    inset: 0;
+    background: rgba(5,9,20,0.78);
+    z-index: 200;
+    place-items: center;
+    padding: 20px;
+  }
+  .modal-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 760px;
+    padding: 18px;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.6);
+  }
+  .toast {
+    position: fixed; right: 20px; bottom: 20px;
+    background: #1d2b53; border: 1px solid var(--accent);
+    padding: 10px 16px; border-radius: 8px; font-size: 13px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    display: none; z-index: 300;
   }
 </style>
 </head>
@@ -335,592 +316,749 @@
 
 <header>
   <div class="brand">
-    <div class="logo-badge">CK</div>
+    <div class="logo-cube">CK</div>
     <div>
-      <h1>ChronoKit Studio · 时序积木工作台</h1>
-      <p>C++20 原子内核 × Lua 5.4 可组合规则积木引擎 — 零 C++ 修改组装任意行业预约系统</p>
+      <h1>ChronoKit Studio v3.0 · 时序积木工作台</h1>
+      <p>C++20 高性能微内核 + Lua 5.4 高阶组合子/预制件热更 · 22 种可插拔积木组装任意行业预约系统</p>
     </div>
   </div>
-  <div class="preset-bar" id="presetBar"></div>
+  <div class="blueprint-bar">
+    <span style="font-size:12.5px;color:var(--muted);">行业蓝图切换：</span>
+    <select id="bpSelect"></select>
+    <button onclick="activateSelectedBlueprint()">一键切换组装</button>
+    <button class="purple" onclick="openCppExportModal()">导出 C++20 代码</button>
+    <button class="secondary" onclick="refreshAll()">刷新状态</button>
+  </div>
 </header>
 
 <div class="container">
-  <!-- Top Metrics -->
-  <div class="stats-row" id="statsRow"></div>
+  <div class="stats-grid" id="statsGrid"></div>
 
-  <!-- Active LEGO Pipeline -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">
-        <span>🧱 当前生效的预约积木流水线 (Composable Brick Pipeline)</span>
-        <span class="badge b-blue" id="bpNameBadge">Loading...</span>
-      </div>
-      <div style="font-size:12px;color:var(--muted)" id="bpDescText"></div>
-    </div>
-    <div class="pipeline-chain" id="pipelineChain"></div>
-    <div id="brickInspector" style="display:none;margin-top:10px;padding:10px 12px;background:#0b101d;border:1px solid var(--border);border-radius:8px;font-size:12px;"></div>
-  </div>
-
-  <!-- Simulator + Live Lua Blueprint Hot-Reload Editor -->
   <div class="main-grid">
-    <!-- Left: Interactive Booking & Smart Slot Recommender -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🚀 交互式预约模拟与复合资源绑定测试</div>
-        <button class="btn btn-secondary btn-sm" onclick="suggestSlots()">✨ 智能推荐空闲时段</button>
+    <!-- Left Column: Active Composable Brick Pipeline + 22-Brick Catalog + Lua Hot-Reload -->
+    <div>
+      <div class="card">
+        <div class="card-title">
+          <span>🧱 当前激活的积木流水线 (含组合子嵌套树)</span>
+          <span class="badge cat-Capacity" id="brickCountBadge">0 块积木</span>
+        </div>
+        <div class="pipeline-list" id="pipelineList"></div>
       </div>
 
-      <div class="form-grid">
-        <div class="field">
-          <label>预约主体 (Actor / 身份与信用分)</label>
-          <select id="actorSelect"></select>
+      <div class="card">
+        <div class="card-title">
+          <span>📦 ChronoKit 全量积木仓库 (22 种原语 + 组合子)</span>
+          <button class="secondary sm" onclick="toggleCatalog()">展开/收起</button>
         </div>
-        <div class="field">
-          <label>预约人数 / 容量单位 (Units)</label>
-          <input type="number" id="unitsInput" value="1" min="1" max="50" />
-        </div>
-        <div class="field full">
-          <label>选择资源（支持多选，一键测试『会议室+设备』原子捆绑锁！）</label>
-          <div class="res-check-list" id="resCheckList"></div>
-        </div>
-        <div class="field">
-          <label>开始时间 (YYYY-MM-DD HH:MM)</label>
-          <input type="text" id="startInput" value="2026-11-10 10:00" />
-        </div>
-        <div class="field">
-          <label>结束时间 (YYYY-MM-DD HH:MM)</label>
-          <input type="text" id="endInput" value="2026-11-10 12:00" />
-        </div>
-        <div class="field">
-          <label>扩展元数据 (如 occasion=anniversary)</label>
-          <input type="text" id="metaInput" placeholder="例如: occasion=anniversary" />
-        </div>
-        <div class="field">
-          <label>满员策略</label>
-          <select id="waitlistSelect">
-            <option value="true">允许满员自动转入优先级候补 (Waitlist)</option>
-            <option value="false">满员直接拒绝 (Hard Reject)</option>
-          </select>
-        </div>
+        <div id="catalogBox" style="display:none;max-height:360px;overflow-y:auto;" class="pipeline-list"></div>
       </div>
 
-      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
-        <button class="btn" onclick="submitBooking()">⚡ 提交预约并追踪积木流水线</button>
-        <button class="btn btn-purple" onclick="submitRecurring()">🔁 按周连订 3 期 (周期预约)</button>
-        <button class="btn btn-amber" onclick="sweepNoShows()">⏱️ 扫描超时未签到 (No-Show自动释放)</button>
-      </div>
-
-      <div id="suggestionsBox" style="display:none;margin-top:12px;"></div>
-
-      <div class="trace-box" id="traceBox">
-        <div style="color:var(--muted);font-size:12px;">💡 点击上方「提交预约」或下方任意订单的「查看追踪」，即可透视每块 C++ / Lua 积木的微秒级决策轨迹！</div>
+      <div class="card">
+        <div class="card-title">
+          <span>⚡ Lua 5.4 蓝图 / 组合子 / Prefab 实时热重载</span>
+          <div style="display:flex;gap:6px;">
+            <button class="success sm" onclick="hotReloadLua(false)">热更规则(保留订单)</button>
+            <button class="warn sm" onclick="hotReloadLua(true)">重置并重载</button>
+          </div>
+        </div>
+        <textarea id="luaEditor" class="lua-editor" spellcheck="false"></textarea>
       </div>
     </div>
 
-    <!-- Right: Live Lua Blueprint Editor & Hot Reload -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🌙 Lua 5.4 预约蓝图实时热更新编辑器 (Hot-Reload DSL)</div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <select id="snippetSelect" style="padding:4px 8px;font-size:12px;" onchange="insertBrickSnippet(this)">
-            <option value="">+ 插入积木模板...</option>
-            <option value="BufferTime">Brick.BufferTime (前后翻台/保洁缓冲)</option>
-            <option value="ApprovalWorkflow">Brick.ApprovalWorkflow (条件审批流)</option>
-            <option value="PartySizeMatcher">Brick.PartySizeMatcher (容量利用率防浪费)</option>
-            <option value="LuaPolicy">Brick.LuaPolicy (自定义Lua计价/准入函数)</option>
-          </select>
-          <button class="btn btn-green btn-sm" onclick="hotReloadLua(false)">⚡ 热重载积木 (保留订单)</button>
-          <button class="btn btn-secondary btn-sm" onclick="hotReloadLua(true)">🔄 重置数据并重载</button>
+    <!-- Right Column: Gantt Chart + Interactive Booking Sandbox + Lifecycle Operations -->
+    <div>
+      <div class="card">
+        <div class="card-title">
+          <span>📊 资源排期可视化甘特图 (含前后置缓冲窗与多态占用)</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="ganttDate" value="2026-11-10" style="width:125px;padding:4px 8px;font-size:12px;" onchange="loadTimeline()" />
+            <button class="secondary sm" onclick="loadTimeline()">刷新排期</button>
+          </div>
+        </div>
+        <div class="gantt-axis">
+          <span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>24:00</span>
+        </div>
+        <div class="gantt-wrap" id="ganttWrap"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>🚀 交互式预约沙盒 (支持捆绑资源 / 优惠券核销 / 两阶段锁座 / 推荐时段)</span>
+          <div style="display:flex;gap:6px;">
+            <button class="secondary sm" onclick="runSuggestSlots()">🔍 智能推荐空闲时段</button>
+            <button class="warn sm" onclick="runSweepNoShows()">⏱️ 扫描超时爽约 & 锁座过期</button>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <label>预约人 (Actor)</label>
+            <select id="actorSelect"></select>
+          </div>
+          <div class="field">
+            <label>主资源 (Resource #1)</label>
+            <select id="resSelect"></select>
+          </div>
+          <div class="field">
+            <label>捆绑附属资源 (可选 #2)</label>
+            <select id="resSelect2"><option value="">-- 不捆绑附属资源 --</option></select>
+          </div>
+          <div class="field">
+            <label>预约数量 / 人数 (Units)</label>
+            <input type="number" id="unitsInput" value="1" min="1" max="100" />
+          </div>
+          <div class="field">
+            <label>开始时间 (YYYY-MM-DD HH:MM)</label>
+            <input type="text" id="startInput" value="2026-11-10 10:00" />
+          </div>
+          <div class="field">
+            <label>结束时间 (YYYY-MM-DD HH:MM)</label>
+            <input type="text" id="endInput" value="2026-11-10 11:00" />
+          </div>
+          <div class="field">
+            <label>优惠券码 (如 EVFREE15 / SPORT30)</label>
+            <input type="text" id="couponInput" placeholder="选填优惠码" />
+          </div>
+          <div class="field">
+            <label>两阶段锁座时长 (分钟, 0=直接确认)</label>
+            <input type="number" id="holdTtlInput" value="0" min="0" max="60" />
+          </div>
+          <div class="field">
+            <label>模拟当前时钟 (测试窗口/早晚取消/签退)</label>
+            <input type="text" id="nowInput" value="2026-11-09 10:00" />
+          </div>
+          <div class="field">
+            <label>周期连订期数 (1=单次)</label>
+            <input type="number" id="occInput" value="1" min="1" max="12" />
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <button onclick="submitBooking()">立即提交预约并透视积木流水线</button>
+          <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px;">
+            <input type="checkbox" id="waitlistCheck" checked /> 满员时自动进入优先级候补队列
+          </label>
+        </div>
+
+        <div id="suggestBox" style="display:none;" class="trace-box"></div>
+        <div id="traceBox" style="display:none;" class="trace-box"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>🖥️ 资源状态矩阵 (点击「模拟故障」验证同规格无感自动换座)</span>
+        </div>
+        <div class="res-grid" id="resGrid"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>📋 预约单全生命周期中心 (支付转正 / 审批 / 签到 / 签退结算 / 原子改签 / 合规转赠)</span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>单号</th>
+                <th>用户</th>
+                <th>资源</th>
+                <th>预约时段 (含缓冲)</th>
+                <th>状态 / 费用明细</th>
+                <th>全生命周期操作</th>
+              </tr>
+            </thead>
+            <tbody id="bookingsBody"></tbody>
+          </table>
         </div>
       </div>
-      <textarea class="lua-editor" id="luaEditor" spellcheck="false"></textarea>
-      <div style="margin-top:8px;font-size:11.5px;color:var(--muted);display:flex;justify-content:space-between;">
-        <span>安全沙箱已启用：500,000 VM 指令配额防死循环保护 · 语法错误原子回滚不中断旧流水线</span>
-        <span id="luaStatusText" style="color:#34d399;">● Lua 5.4 VM Ready</span>
+
+      <div class="card">
+        <div class="card-title"><span>📡 领域事件总线 & Lua 钩子实时日志</span></div>
+        <div class="event-feed" id="eventFeed"></div>
       </div>
     </div>
   </div>
+</div>
 
-  <!-- Resources & Fault Auto-Reallocation Matrix -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">🖥️ 可预约资源矩阵与故障自愈演练 (点击「模拟故障」体验自动无感换座！)</div>
+<!-- C++20 Code Exporter Modal -->
+<div class="modal-backdrop" id="cppModal" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal-box">
+    <div class="card-title">
+      <span>⚙️ C++20 EngineBuilder 代码一键导出 (无需 Lua 亦可纯 C++ 编译部署)</span>
+      <div style="display:flex;gap:8px;">
+        <button class="success sm" onclick="copyCppCode()">复制代码</button>
+        <button class="secondary sm" onclick="document.getElementById('cppModal').style.display='none'">关闭</button>
+      </div>
     </div>
-    <div class="res-grid" id="resGrid"></div>
+    <textarea id="cppCodeArea" class="lua-editor" style="min-height:340px;" readonly></textarea>
   </div>
+</div>
 
-  <!-- Bookings Table & Event Stream -->
-  <div class="main-grid">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📋 预约账本与全生命周期状态机 (签到 / 审批 / 退订自动递补)</div>
-      </div>
-      <div style="overflow-x:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th>单号</th>
-              <th>用户</th>
-              <th>绑定资源</th>
-              <th>预约时段 (实际含缓冲)</th>
-              <th>状态 / 优先级</th>
-              <th>费用</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="bookingsTbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📡 领域事件总线与 Lua Hook 实时日志</div>
-      </div>
-      <div class="event-list" id="eventList"></div>
-    </div>
-  </div>
+<!-- Atomic Reschedule / Transfer Quick Modal -->
+<div class="modal-backdrop" id="actionModal" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal-box" style="max-width:460px;" id="actionModalBody"></div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script>
-let appState = null;
-let presets = [];
-let luaDirty = false;
+let cachedActors = [];
+let cachedResources = [];
 
-const presetLabels = {
-  "01_university_lab.lua": "🎓 01 高校机房与GPU算力",
-  "02_hospital_clinic.lua": "🏥 02 三甲医院专家挂号",
-  "03_enterprise_meeting.lua": "🏢 03 企业会议室+设备联动",
-  "04_fitness_studio.lua": "🏋️ 04 健身房团课与私教",
-  "05_fine_dining.lua": "🍷 05 黑珍珠餐厅订座"
-};
-
-function showToast(msg, isErr = false) {
-  const el = document.getElementById("toast");
-  el.style.borderColor = isErr ? "var(--red)" : "var(--accent)";
-  el.textContent = msg;
-  el.style.display = "block";
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
   clearTimeout(window._toastTimer);
-  window._toastTimer = setTimeout(() => { el.style.display = "none"; }, 3800);
+  window._toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
 }
 
-async function api(method, path, body = null) {
-  const opts = { method, headers: { "Content-Type": "application/json" } };
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(path, opts);
-  return await res.json();
+  const r = await fetch(path, opts);
+  return await r.json();
 }
 
-async function init() {
-  document.getElementById("luaEditor").addEventListener("input", () => { luaDirty = true; });
-  const bpRes = await api("GET", "/api/blueprints");
-  presets = bpRes.presets || [];
-  await refreshState(true);
+function toggleCatalog() {
+  const el = document.getElementById('catalogBox');
+  el.style.display = el.style.display === 'none' ? 'flex' : 'none';
 }
 
-async function refreshState(forceUpdateLua = false) {
-  const data = await api("GET", "/api/state");
-  if (!data.ok) return;
-  appState = data;
-
-  // Render Preset Buttons
-  const bar = document.getElementById("presetBar");
-  bar.innerHTML = "";
-  presets.forEach(p => {
-    const btn = document.createElement("button");
-    const isActive = (data.blueprint.source_path || "").endsWith(p.filename);
-    btn.className = "preset-btn" + (isActive ? " active" : "");
-    btn.textContent = presetLabels[p.filename] || p.filename;
-    btn.onclick = () => switchBlueprint(p.path);
-    bar.appendChild(btn);
+async function loadBlueprints() {
+  const data = await api('/api/blueprints');
+  const sel = document.getElementById('bpSelect');
+  sel.innerHTML = '';
+  (data.blueprints || []).forEach(bp => {
+    const opt = document.createElement('option');
+    opt.value = bp.file;
+    opt.textContent = `${bp.name} (${bp.brick_count}块积木)`;
+    if (bp.id === data.active_id) opt.selected = true;
+    sel.appendChild(opt);
   });
-
-  // Render Stats
-  const st = data.stats;
-  const bySt = st.bookings_by_status || {};
-  document.getElementById("statsRow").innerHTML = `
-    <div class="stat-card">
-      <div class="label">当前装配蓝图</div>
-      <div class="val" style="font-size:15px;color:#60a5fa;">${st.blueprint_name}</div>
-      <div class="sub">存储引擎: ${st.storage_backend}</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">已组装积木数</div>
-      <div class="val">${st.bricks_count} <span style="font-size:13px;color:var(--muted);">Bricks</span></div>
-      <div class="sub">C++20 原生 + Lua 5.4 策略</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">资源健康度</div>
-      <div class="val">${st.resources_active} <span style="font-size:13px;color:var(--muted);">/ ${st.resources_total} 可用</span></div>
-      <div class="sub" style="color:${st.resources_fault > 0 ? '#f87171' : 'var(--muted)'};">故障检修中: ${st.resources_fault}</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">生效确认 / 候补排队 / 待审</div>
-      <div class="val">${(bySt.CONFIRMED||0)+(bySt.CHECKED_IN||0)} / <span style="color:#fbbf24">${bySt.WAITLISTED||0}</span> / <span style="color:#c084fc">${bySt.PENDING_APPROVAL||0}</span></div>
-      <div class="sub">累计订单总数: ${st.bookings_total}</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">核定总营收 / 经费结算</div>
-      <div class="val" style="color:#34d399;">¥${Number(st.net_revenue || 0).toFixed(2)}</div>
-      <div class="sub">币种: ${st.currency}</div>
-    </div>
-  `;
-
-  // Render Pipeline Bricks
-  document.getElementById("bpNameBadge").textContent = `${data.blueprint.id} · ${data.blueprint.bricks.length} 块积木`;
-  document.getElementById("bpDescText").textContent = data.blueprint.description || "";
-
-  const chain = document.getElementById("pipelineChain");
-  chain.innerHTML = "";
-  data.blueprint.bricks.forEach((b, idx) => {
-    const div = document.createElement("div");
-    div.className = "brick-node";
-    div.dataset.cat = b.category;
-    div.innerHTML = `
-      <div class="brick-top">
-        <span>#${idx + 1} · ${b.category}</span>
-        <span>Ord ${b.order}</span>
-      </div>
-      <div class="brick-name">${b.type_id}</div>
-      <div class="brick-desc">${b.summary}</div>
-    `;
-    div.onclick = () => inspectBrick(b);
-    chain.appendChild(div);
-  });
-
-  // Update Lua Editor if needed
-  if (forceUpdateLua || !luaDirty) {
-    document.getElementById("luaEditor").value = data.lua_source || "";
-    luaDirty = false;
+  if (data.active_lua_source) {
+    document.getElementById('luaEditor').value = data.active_lua_source;
   }
-
-  // Update Actor Select
-  const actSel = document.getElementById("actorSelect");
-  const prevAct = actSel.value;
-  actSel.innerHTML = "";
-  data.actors.forEach(a => {
-    const opt = document.createElement("option");
-    opt.value = a.id;
-    opt.textContent = `${a.name} [${(a.roles||[]).join(",")}] (信用:${a.credit_score})`;
-    actSel.appendChild(opt);
-  });
-  if (prevAct && data.actors.some(a => a.id === prevAct)) actSel.value = prevAct;
-
-  // Update Resource Checkboxes
-  const prevChecked = Array.from(document.querySelectorAll("#resCheckList input:checked")).map(i => i.value);
-  const resList = document.getElementById("resCheckList");
-  resList.innerHTML = "";
-  data.resources.forEach((r, idx) => {
-    const checked = prevChecked.length > 0 ? prevChecked.includes(r.id) : idx === 0;
-    const lbl = document.createElement("label");
-    lbl.className = "res-chip" + (r.status !== "ACTIVE" ? " fault" : "");
-    lbl.innerHTML = `
-      <input type="checkbox" value="${r.id}" ${checked ? "checked" : ""} />
-      <span>${r.name} <small style="color:var(--muted)">(容:${r.capacity}${r.status !== 'ACTIVE' ? ' · ' + r.status : ''})</small></span>
-    `;
-    resList.appendChild(lbl);
-  });
-
-  // Render Resource Cards
-  const rg = document.getElementById("resGrid");
-  rg.innerHTML = "";
-  data.resources.forEach(r => {
-    const isFault = r.status !== "ACTIVE";
-    const tagsHtml = (r.tags || []).map(t => `<span class="badge b-cyan" style="margin-right:4px;">#${t}</span>`).join("");
-    const card = document.createElement("div");
-    card.className = "res-card" + (isFault ? " fault" : "");
-    card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <strong style="font-size:13px;">${r.name}</strong>
-        <span class="badge ${isFault ? 'b-red' : 'b-green'}">${r.status}</span>
-      </div>
-      <div style="font-size:11.5px;color:var(--muted);">ID: ${r.id} · 类型: ${r.kind} · 容量: ${r.capacity}</div>
-      <div>${tagsHtml || '<span style="font-size:11px;color:var(--muted);">无特殊标签</span>'}</div>
-      <div style="margin-top:4px;display:flex;gap:6px;">
-        ${isFault
-          ? `<button class="btn btn-green btn-sm" onclick="toggleFault('${r.id}', 'restore')">🔧 修复恢复上线</button>`
-          : `<button class="btn btn-red btn-sm" onclick="toggleFault('${r.id}', 'fault')">⚠️ 模拟故障 (自动换座)</button>`}
-      </div>
-    `;
-    rg.appendChild(card);
-  });
-
-  // Render Bookings Table
-  const tbody = document.getElementById("bookingsTbody");
-  tbody.innerHTML = "";
-  data.bookings.forEach(b => {
-    const stBadge = statusBadge(b.status);
-    const tr = document.createElement("tr");
-    const hasBuf = b.post_buffer_minutes > 0 || b.pre_buffer_minutes > 0;
-    const reallocNote = b.reallocated_from ? `<div style="font-size:11px;color:#34d399;">⚡ 自动换座自 ${b.reallocated_from}</div>` : "";
-    tr.innerHTML = `
-      <td><strong>${b.id}</strong>${b.series_id ? `<div style="font-size:10.5px;color:#c084fc;">${b.series_id}</div>` : ""}</td>
-      <td>${b.actor_id}<div style="font-size:11px;color:var(--muted);">数量: ${b.units}</div></td>
-      <td>${(b.resource_ids||[]).join(" + ")}${reallocNote}</td>
-      <td>
-        <div>${b.start_time} ~ ${b.end_time.slice(11)}</div>
-        ${hasBuf ? `<div style="font-size:11px;color:#22d3ee;">含缓冲锁: ${b.effective_start.slice(11)}~${b.effective_end.slice(11)}</div>` : ""}
-      </td>
-      <td>${stBadge} <div style="font-size:11px;color:var(--muted);">Prio: ${b.priority}</div></td>
-      <td>¥${Number(b.price).toFixed(2)}${b.refund_amount > 0 ? `<div style="font-size:11px;color:#fbbf24;">退:¥${Number(b.refund_amount).toFixed(2)}</div>` : ""}</td>
-      <td>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;">
-          <button class="btn btn-secondary btn-sm" onclick='renderTrace(${JSON.stringify(b.decision_trace)}, "${b.id}")'>轨迹</button>
-          ${b.status === "PENDING_APPROVAL" ? `<button class="btn btn-green btn-sm" onclick="approveBk('${b.id}', true)">批准</button><button class="btn btn-red btn-sm" onclick="approveBk('${b.id}', false)">驳回</button>` : ""}
-          ${b.status === "CONFIRMED" ? `<button class="btn btn-green btn-sm" onclick="checkinBk('${b.id}', '${b.actor_id}')">签到</button>` : ""}
-          ${b.status === "CHECKED_IN" ? `<button class="btn btn-purple btn-sm" onclick="completeBk('${b.id}')">完结</button>` : ""}
-          ${["CONFIRMED","WAITLISTED","PENDING_APPROVAL","CHECKED_IN"].includes(b.status) ? `<button class="btn btn-red btn-sm" onclick="cancelBk('${b.id}', '${b.actor_id}')">取消</button>` : ""}
-        </div>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-
-  // Render Events + Lua Logs
-  const evBox = document.getElementById("eventList");
-  evBox.innerHTML = "";
-  (data.lua_logs || []).forEach(l => {
-    const d = document.createElement("div");
-    d.className = "event-item";
-    d.style.borderLeftColor = "var(--purple)";
-    d.innerHTML = `<span class="badge b-purple">Lua Hook</span> ${escapeHtml(l)}`;
-    evBox.appendChild(d);
-  });
-  (data.events || []).forEach(e => {
-    const d = document.createElement("div");
-    d.className = "event-item";
-    d.innerHTML = `<span style="color:var(--muted);font-family:monospace;">[${e.timestamp.slice(11)}]</span> <strong>${e.type}</strong> · ${escapeHtml(e.message)}`;
-    evBox.appendChild(d);
-  });
 }
 
-function statusBadge(s) {
-  const map = {
-    CONFIRMED: "b-green",
-    CHECKED_IN: "b-cyan",
-    COMPLETED: "b-blue",
-    WAITLISTED: "b-amber",
-    PENDING_APPROVAL: "b-purple",
-    CANCELLED: "b-red",
-    REJECTED: "b-red",
-    NO_SHOW: "b-red",
-    FAULT_DISPLACED: "b-amber"
-  };
-  return `<span class="badge ${map[s] || 'b-blue'}">${s}</span>`;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-function inspectBrick(b) {
-  const box = document.getElementById("brickInspector");
-  box.style.display = "block";
-  box.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-      <strong>🔍 积木透视：${b.type_id} (Stage Order: ${b.order}, Category: ${b.category})</strong>
-      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('brickInspector').style.display='none'">收起</button>
-    </div>
-    <div style="color:var(--muted);margin-bottom:6px;">${b.summary}</div>
-    <pre style="background:#070a12;padding:8px;border-radius:6px;overflow-x:auto;color:#93c5fd;">当前生效配置: ${JSON.stringify(b.current_config, null, 2)}</pre>
-  `;
-}
-
-async function switchBlueprint(path) {
-  luaDirty = false;
-  const res = await api("POST", "/api/blueprint/switch", { path, seed_demo: true });
+async function activateSelectedBlueprint() {
+  const file = document.getElementById('bpSelect').value;
+  const res = await api('/api/blueprints/activate', 'POST', { file, seed_demo: true });
   if (res.ok) {
-    document.getElementById("suggestionsBox").style.display = "none";
-    showToast("已切换行业预约蓝图：" + res.blueprint.name);
-    await refreshState(true);
+    document.getElementById('luaEditor').value = res.lua_source || '';
+    document.getElementById('traceBox').style.display = 'none';
+    document.getElementById('suggestBox').style.display = 'none';
+    showToast(`已切换组装蓝图：${res.name}`);
+    await refreshAll();
   } else {
-    showToast(res.message || "切换失败", true);
+    showToast('切换失败: ' + res.message);
   }
 }
 
 async function hotReloadLua(resetData) {
-  const code = document.getElementById("luaEditor").value;
-  const res = await api("POST", "/api/blueprint/reload", { lua_code: code, reset_data: resetData });
-  const statusEl = document.getElementById("luaStatusText");
+  const lua_code = document.getElementById('luaEditor').value;
+  const res = await api('/api/blueprints/hot-reload', 'POST', { lua_code, reset_data: resetData });
   if (res.ok) {
-    luaDirty = false;
-    statusEl.style.color = "#34d399";
-    statusEl.textContent = "● 热重载成功 (" + res.blueprint.bricks.length + " 块积木)";
-    showToast("⚡ Lua 蓝图热重载生效！");
-    await refreshState(false);
+    showToast(`⚡ ${res.message} (${res.bricks_count} 块积木)`);
+    await refreshAll();
   } else {
-    statusEl.style.color = "#f87171";
-    statusEl.textContent = "● 编译拦截: " + res.message;
-    showToast("Lua 错误 (原流水线安全保留): " + res.message, true);
+    alert('Lua 蓝图热重载编译报错:\n' + res.message);
   }
 }
 
-function parseMetaInput() {
-  const raw = document.getElementById("metaInput").value.trim();
-  const obj = {};
-  if (!raw) return obj;
-  raw.split(",").forEach(part => {
-    const eq = part.indexOf("=");
-    if (eq > 0) obj[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-  });
-  return obj;
+async function openCppExportModal() {
+  const res = await api('/api/export/cpp');
+  if (res.ok) {
+    document.getElementById('cppCodeArea').value = res.cpp_code;
+    document.getElementById('cppModal').style.display = 'grid';
+  }
 }
 
-function getSelectedResources() {
-  return Array.from(document.querySelectorAll("#resCheckList input:checked")).map(i => i.value);
+function copyCppCode() {
+  const ta = document.getElementById('cppCodeArea');
+  ta.select();
+  navigator.clipboard.writeText(ta.value);
+  showToast('✅ C++20 EngineBuilder 代码已复制到剪贴板');
+}
+
+async function loadPipeline() {
+  const data = await api('/api/pipeline');
+  const list = document.getElementById('pipelineList');
+  const pipe = data.pipeline || [];
+  document.getElementById('brickCountBadge').textContent = `${pipe.length} 块顶层积木`;
+
+  list.innerHTML = pipe.map((b, idx) => {
+    const cfgCopy = Object.assign({}, b.current_config || {});
+    delete cfgCopy._brick_type;
+    const cfgStr = Object.keys(cfgCopy).length ? JSON.stringify(cfgCopy) : '';
+    const isComb = b.category === 'Combinator';
+    const childrenHtml = (b.children && b.children.length)
+      ? `<div class="child-bricks">${b.children.map(ch => `
+          <div class="child-brick-item">
+            <span class="badge cat-${ch.category}">${ch.category}</span>
+            <b>${ch.type_id}</b> — <span style="color:var(--muted);">${ch.summary}</span>
+          </div>`).join('')}</div>`
+      : '';
+    return `
+      <div class="brick-node ${isComb ? 'combinator-node' : ''}">
+        <div class="top">
+          <span class="name">#${idx + 1} · ${b.type_id}</span>
+          <div style="display:flex;gap:5px;align-items:center;">
+            <span class="badge cat-${b.category}">${b.category} · Stage ${b.order}</span>
+            <button class="danger sm" title="运行时卸载此积木" onclick="removeBrickLive('${b.type_id}')">×</button>
+          </div>
+        </div>
+        <div class="desc">${b.summary}</div>
+        ${cfgStr ? `<div class="cfg">${cfgStr}</div>` : ''}
+        ${childrenHtml}
+      </div>
+    `;
+  }).join('');
+
+  const catBox = document.getElementById('catalogBox');
+  catBox.innerHTML = (data.catalog || []).map(c => {
+    const canHotMount = c.category !== 'Combinator' && c.category !== 'Lua';
+    return `
+      <div class="brick-node" style="border-left-color:var(--purple);">
+        <div class="top">
+          <span class="name">Brick.${c.type_id}</span>
+          <span class="badge cat-${c.category}">${c.category} · Stage ${c.order}</span>
+        </div>
+        <div class="desc">${c.summary}</div>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          ${canHotMount ? `<button class="success sm" onclick="addBrickLive('${c.type_id}')">+ 动态挂载</button>` : ''}
+          <button class="secondary sm" onclick="insertBrickLuaSnippet('${c.type_id}')">+ 插入 Lua 模板</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function addBrickLive(typeId) {
+  const res = await api('/api/pipeline/add-brick', 'POST', { type_id: typeId, config: {} });
+  showToast(res.message);
+  await loadPipeline();
+}
+
+async function removeBrickLive(name) {
+  const res = await api('/api/pipeline/remove-brick', 'POST', { name });
+  showToast(res.message);
+  await loadPipeline();
+}
+
+function insertBrickLuaSnippet(typeId) {
+  const ta = document.getElementById('luaEditor');
+  let snippet = `\n        Brick.${typeId} {},\n`;
+  if (typeId === 'When') {
+    snippet = `\n        Brick.When {\n            name = "CustomBranch",\n            condition = { weekdays = {6, 7} },\n            then_brick = Brick.QuotaLimiter { max_daily_bookings_per_actor = 1 },\n        },\n`;
+  } else if (typeId === 'AnyOf') {
+    snippet = `\n        Brick.AnyOf {\n            name = "CustomOrGate",\n            bricks = {\n                Brick.RoleAndCreditGate { min_credit_score = 110 },\n            }\n        },\n`;
+  }
+  const marker = 'bricks = {';
+  const idx = ta.value.indexOf(marker);
+  if (idx !== -1) {
+    const pos = idx + marker.length;
+    ta.value = ta.value.slice(0, pos) + snippet + ta.value.slice(pos);
+    showToast(`已在 Lua 编辑器插入 Brick.${typeId} 模板，点击「热更规则」即可生效`);
+  }
+}
+
+async function loadTimeline() {
+  const date = document.getElementById('ganttDate').value || '2026-11-10';
+  const data = await api('/api/timeline?date=' + encodeURIComponent(date));
+  const wrap = document.getElementById('ganttWrap');
+  wrap.innerHTML = (data.rows || []).map(row => {
+    const blocksHtml = (row.blocks || []).map(b => {
+      const leftPct = (b.start_min_of_day / 1440 * 100).toFixed(2);
+      const widthPct = Math.max(1.2, (b.end_min_of_day - b.start_min_of_day) / 1440 * 100).toFixed(2);
+      const effLeftPct = (b.eff_start_min_of_day / 1440 * 100).toFixed(2);
+      const effWidthPct = ((b.eff_end_min_of_day - b.eff_start_min_of_day) / 1440 * 100).toFixed(2);
+      const bufHtml = (b.eff_end_min_of_day > b.end_min_of_day || b.eff_start_min_of_day < b.start_min_of_day)
+        ? `<div class="gantt-buf" style="left:${effLeftPct}%;width:${effWidthPct}%;"></div>`
+        : '';
+      return `${bufHtml}<div class="gantt-bar bar-${b.status}" style="left:${leftPct}%;width:${widthPct}%;" title="${b.booking_id} | ${b.actor_id} | ${b.status}">${b.booking_id} (${b.actor_id})</div>`;
+    }).join('');
+    return `
+      <div class="gantt-row">
+        <div class="gantt-label" title="${row.resource_name}">${row.status === 'FAULT' ? '⚠️ ' : ''}${row.resource_name}</div>
+        <div class="gantt-track">${blocksHtml}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadState() {
+  const data = await api('/api/state');
+  const s = data.stats || {};
+  cachedActors = data.actors || [];
+  cachedResources = data.resources || [];
+
+  const bySt = s.bookings_by_status || {};
+  document.getElementById('statsGrid').innerHTML = `
+    <div class="stat-card">
+      <div class="label">当前激活系统蓝图</div>
+      <div class="val" style="font-size:15px;">${s.blueprint_name || '-'}</div>
+      <div class="sub">存储引擎: ${s.storage_backend} · 顶层积木 ${s.bricks_count} 块</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">可预约资源池</div>
+      <div class="val">${s.resources_active || 0} / ${s.resources_total || 0}</div>
+      <div class="sub">${s.resources_fault > 0 ? `⚠️ ${s.resources_fault} 台资源故障迁移中` : '全部硬件健康在线'}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">活跃确认 / 候补 / 锁座</div>
+      <div class="val">${bySt.CONFIRMED || 0} <span style="font-size:13px;color:var(--amber);">/ 候补 ${bySt.WAITLISTED || 0} / 锁座 ${bySt.PENDING_PAYMENT || 0}</span></div>
+      <div class="sub">待审批: ${bySt.PENDING_APPROVAL || 0} · 已完结: ${bySt.COMPLETED || 0}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">净营收 & 优惠减免总额</div>
+      <div class="val">¥${Number(s.net_revenue || 0).toFixed(2)}</div>
+      <div class="sub">已核销优惠立减: ¥${Number(s.total_discounts || 0).toFixed(2)}</div>
+    </div>
+  `;
+
+  const actSel = document.getElementById('actorSelect');
+  const prevAct = actSel.value;
+  actSel.innerHTML = cachedActors.map(a =>
+    `<option value="${a.id}">${a.name} [${a.roles.join(',') || 'user'}] (信用:${a.credit_score})</option>`
+  ).join('');
+  if (prevAct && cachedActors.some(a => a.id === prevAct)) actSel.value = prevAct;
+
+  const resSel = document.getElementById('resSelect');
+  const resSel2 = document.getElementById('resSelect2');
+  const prevRes = resSel.value;
+  resSel.innerHTML = cachedResources.map(r =>
+    `<option value="${r.id}">${r.name} (容量:${r.capacity} ${r.status !== 'ACTIVE' ? '⚠️故障' : ''})</option>`
+  ).join('');
+  resSel2.innerHTML = `<option value="">-- 不捆绑附属资源 --</option>` + cachedResources.map(r =>
+    `<option value="${r.id}">${r.name} (${r.kind})</option>`
+  ).join('');
+  if (prevRes && cachedResources.some(r => r.id === prevRes)) resSel.value = prevRes;
+
+  document.getElementById('resGrid').innerHTML = cachedResources.map(r => `
+    <div class="res-item ${r.status === 'FAULT' ? 'fault' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong style="font-size:12.5px;">${r.name}</strong>
+        <span class="badge ${r.status === 'ACTIVE' ? 'cat-Pricing' : 'cat-Workflow'}">${r.status}</span>
+      </div>
+      <div style="font-size:11.5px;color:var(--muted);margin:4px 0;">
+        ID: ${r.id} · 容量: ${r.capacity} · 类别: ${r.kind}<br/>
+        标签: ${(r.tags || []).map(t => '#' + t).join(' ') || '无'}
+      </div>
+      <div style="margin-top:7px;">
+        ${r.status === 'ACTIVE'
+          ? `<button class="danger sm" onclick="triggerFault('${r.id}')">⚡ 模拟突发故障(测无感换座)</button>`
+          : `<button class="success sm" onclick="restoreRes('${r.id}')">🔧 修复上线(触发递补)</button>`
+        }
+      </div>
+    </div>
+  `).join('');
+
+  const tbody = document.getElementById('bookingsBody');
+  const bookings = data.bookings || [];
+  if (!bookings.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);">暂无预约记录，请在上方沙盒发起预约</td></tr>`;
+  } else {
+    tbody.innerHTML = bookings.map(b => {
+      const bufInfo = (b.pre_buffer_minutes || b.post_buffer_minutes)
+        ? `<br/><span style="font-size:11px;color:var(--cyan);">实际锁占: ${b.effective_start.slice(11)}~${b.effective_end.slice(11)}</span>`
+        : '';
+      const reallocInfo = b.reallocated_from
+        ? `<br/><span style="font-size:11px;color:var(--amber);">⚡ 自故障资源 ${b.reallocated_from} 无感迁入</span>`
+        : '';
+      const transInfo = b.transferred_from
+        ? `<br/><span style="font-size:11px;color:var(--purple);">🎁 由 ${b.transferred_from} 合规转赠</span>`
+        : '';
+      const reschedInfo = b.reschedule_count > 0
+        ? ` <span class="badge cat-Temporal">已改签×${b.reschedule_count}</span>`
+        : '';
+      const discInfo = b.discount_amount > 0
+        ? `<div style="font-size:11px;color:var(--green);">券减 ¥${Number(b.discount_amount).toFixed(1)}${b.coupon_code ? ` (${b.coupon_code})` : ''}</div>`
+        : '';
+      const otInfo = b.overtime_fee > 0
+        ? `<div style="font-size:11px;color:var(--amber);">超时费 +¥${Number(b.overtime_fee).toFixed(1)}</div>`
+        : '';
+
+      const actions = [];
+      if (b.status === 'PENDING_PAYMENT') {
+        actions.push(`<button class="purple sm" onclick="payBooking('${b.id}','${b.actor_id}')">💳 支付转正</button>`);
+      }
+      if (b.status === 'PENDING_APPROVAL') {
+        actions.push(`<button class="success sm" onclick="approveBooking('${b.id}', true)">审批通过</button>`);
+        actions.push(`<button class="danger sm" onclick="approveBooking('${b.id}', false)">驳回</button>`);
+      }
+      if (b.status === 'CONFIRMED') {
+        actions.push(`<button class="success sm" onclick="checkInBooking('${b.id}','${b.actor_id}','${b.start_time}')">签到</button>`);
+        actions.push(`<button class="secondary sm" onclick="openRescheduleModal('${b.id}','${b.actor_id}','${b.start_time}','${b.end_time}')">改签</button>`);
+        actions.push(`<button class="secondary sm" onclick="openTransferModal('${b.id}','${b.actor_id}')">转赠</button>`);
+      }
+      if (b.status === 'CHECKED_IN' || b.status === 'CONFIRMED') {
+        actions.push(`<button class="warn sm" onclick="openCheckoutModal('${b.id}','${b.actor_id}','${b.end_time}')">签退结算</button>`);
+      }
+      if (['CONFIRMED', 'WAITLISTED', 'PENDING_APPROVAL', 'PENDING_PAYMENT'].includes(b.status)) {
+        actions.push(`<button class="danger sm" onclick="cancelBooking('${b.id}','${b.actor_id}')">取消</button>`);
+      }
+
+      return `
+        <tr>
+          <td><strong>${b.id}</strong>${reschedInfo}${b.series_id ? `<br/><span class="badge cat-Temporal">${b.series_id}</span>` : ''}</td>
+          <td>${b.actor_id}<br/><span style="font-size:11px;color:var(--muted);">数量:${b.units} · 优先级:${b.priority}</span>${transInfo}</td>
+          <td>${(b.resource_ids || []).join(' + ')}${reallocInfo}</td>
+          <td>${b.start_time} ~ ${b.end_time.slice(11)}${bufInfo}</td>
+          <td>
+            <span class="st-${b.status}">${b.status}</span>
+            <div style="font-size:11.5px;color:var(--muted);">实付 ¥${Number(b.price).toFixed(1)}</div>
+            ${discInfo}${otInfo}
+          </td>
+          <td style="display:flex;gap:4px;flex-wrap:wrap;">${actions.join('')}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  const evs = data.events || [];
+  document.getElementById('eventFeed').innerHTML = evs.map(e => `
+    <div class="event-row">
+      <span style="color:var(--muted);">[${e.timestamp}]</span>
+      <strong style="color:var(--cyan);"> ${e.type}</strong> — ${e.message}
+    </div>
+  `).join('');
+}
+
+function renderTrace(res) {
+  const box = document.getElementById('traceBox');
+  box.style.display = 'block';
+  const trace = res.trace || (res.outcomes && res.outcomes[0] ? res.outcomes[0].trace : []);
+  const headerColor = res.ok ? 'var(--green)' : 'var(--red)';
+  box.innerHTML = `
+    <div style="font-weight:700;color:${headerColor};margin-bottom:6px;">
+      ${res.ok ? '✅ 积木流水线执行通过' : '⛔ 积木拦截：' + (res.error_code || '')} — ${res.message || res.summary || ''}
+      ${res.record ? ` | 单号: ${res.record.id} | 实付: ¥${Number(res.record.price).toFixed(2)}${res.record.discount_amount > 0 ? ` (已省 ¥${Number(res.record.discount_amount).toFixed(2)})` : ''}` : ''}
+    </div>
+    ${(trace || []).map(t => `
+      <div class="trace-step">
+        <span>${t.passed ? '🟢' : '🔴'}</span>
+        <span class="badge cat-${t.category}">${t.brick_name}</span>
+        <span style="color:var(--text);flex:1;">${t.note || t.outcome}</span>
+        <span style="color:var(--muted);font-family:monospace;">${Number(t.elapsed_us).toFixed(1)} µs</span>
+      </div>
+    `).join('')}
+  `;
 }
 
 async function submitBooking() {
-  const rids = getSelectedResources();
-  if (rids.length === 0) { showToast("请至少勾选一个资源", true); return; }
-  const res = await api("POST", "/api/book", {
-    actor_id: document.getElementById("actorSelect").value,
+  const rids = [document.getElementById('resSelect').value];
+  const r2 = document.getElementById('resSelect2').value;
+  if (r2 && r2 !== rids[0]) rids.push(r2);
+
+  const payload = {
+    actor_id: document.getElementById('actorSelect').value,
     resource_ids: rids,
-    start_time: document.getElementById("startInput").value,
-    end_time: document.getElementById("endInput").value,
-    units: Number(document.getElementById("unitsInput").value || 1),
-    allow_waitlist: document.getElementById("waitlistSelect").value === "true",
-    metadata: parseMetaInput()
+    start_time: document.getElementById('startInput').value,
+    end_time: document.getElementById('endInput').value,
+    units: Number(document.getElementById('unitsInput').value || 1),
+    coupon_code: document.getElementById('couponInput').value.trim(),
+    hold_ttl_minutes: Number(document.getElementById('holdTtlInput').value || 0),
+    now: document.getElementById('nowInput').value,
+    allow_waitlist: document.getElementById('waitlistCheck').checked,
+    occurrences: Number(document.getElementById('occInput').value || 1),
+    interval_days: 7
+  };
+
+  const res = await api('/api/book', 'POST', payload);
+  renderTrace(res);
+  await loadState();
+  await loadTimeline();
+}
+
+async function payBooking(id, actorId) {
+  const now = document.getElementById('nowInput').value;
+  const res = await api('/api/bookings/pay', 'POST', { booking_id: id, actor_id: actorId, now });
+  showToast(res.ok ? `💳 订单 ${id} 支付成功并正式确认` : `支付失败: ${res.message}`);
+  renderTrace(res);
+  await loadState();
+  await loadTimeline();
+}
+
+function openRescheduleModal(id, actorId, curStart, curEnd) {
+  const modal = document.getElementById('actionModal');
+  document.getElementById('actionModalBody').innerHTML = `
+    <div class="card-title"><span>🔄 原子改签 (失败零副作用 · 成功自动递补旧席位候补)</span></div>
+    <div class="field" style="margin-bottom:8px;">
+      <label>新开始时间 (YYYY-MM-DD HH:MM)</label>
+      <input id="rsStart" value="${curStart}" />
+    </div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>新结束时间 (YYYY-MM-DD HH:MM)</label>
+      <input id="rsEnd" value="${curEnd}" />
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="secondary" onclick="document.getElementById('actionModal').style.display='none'">取消</button>
+      <button onclick="doReschedule('${id}','${actorId}')">确认原子改签</button>
+    </div>
+  `;
+  modal.style.display = 'grid';
+}
+
+async function doReschedule(id, actorId) {
+  const new_start_time = document.getElementById('rsStart').value;
+  const new_end_time = document.getElementById('rsEnd').value;
+  const now = document.getElementById('nowInput').value;
+  document.getElementById('actionModal').style.display = 'none';
+  const res = await api('/api/bookings/reschedule', 'POST', { booking_id: id, actor_id: actorId, new_start_time, new_end_time, now });
+  showToast(res.ok ? `✅ 订单 ${id} 原子改签成功` : `⛔ 改签拦截(原单无损保留): ${res.message}`);
+  renderTrace(res);
+  await loadState();
+  await loadTimeline();
+}
+
+function openTransferModal(id, fromActor) {
+  const modal = document.getElementById('actionModal');
+  const opts = cachedActors.filter(a => a.id !== fromActor).map(a =>
+    `<option value="${a.id}">${a.name} [${a.roles.join(',')}] (信用:${a.credit_score})</option>`
+  ).join('');
+  document.getElementById('actionModalBody').innerHTML = `
+    <div class="card-title"><span>🎁 预约权益合规转赠 (自动复核接收方信用/角色/限额)</span></div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>选择接收方用户 (Recipient)</label>
+      <select id="tfTarget">${opts}</select>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="secondary" onclick="document.getElementById('actionModal').style.display='none'">取消</button>
+      <button onclick="doTransfer('${id}','${fromActor}')">验证资格并立即转赠</button>
+    </div>
+  `;
+  modal.style.display = 'grid';
+}
+
+async function doTransfer(id, fromActor) {
+  const to_actor_id = document.getElementById('tfTarget').value;
+  const now = document.getElementById('nowInput').value;
+  document.getElementById('actionModal').style.display = 'none';
+  const res = await api('/api/bookings/transfer', 'POST', { booking_id: id, from_actor_id: fromActor, to_actor_id, now });
+  showToast(res.ok ? `🎁 订单 ${id} 已成功转赠给 ${to_actor_id}` : `⛔ 转赠被拒: ${res.message}`);
+  renderTrace(res);
+  await loadState();
+  await loadTimeline();
+}
+
+function openCheckoutModal(id, actorId, scheduledEnd) {
+  const modal = document.getElementById('actionModal');
+  document.getElementById('actionModalBody').innerHTML = `
+    <div class="card-title"><span>🏁 实际签退结算 (早退自动释放尾段触发候补 / 超时自动加收占用费)</span></div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>实际离场签退时间 (原定结束: ${scheduledEnd})</label>
+      <input id="coNow" value="${scheduledEnd}" />
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="secondary" onclick="document.getElementById('actionModal').style.display='none'">取消</button>
+      <button onclick="doCheckout('${id}','${actorId}')">执行签退结算</button>
+    </div>
+  `;
+  modal.style.display = 'grid';
+}
+
+async function doCheckout(id, actorId) {
+  const now = document.getElementById('coNow').value;
+  document.getElementById('actionModal').style.display = 'none';
+  const res = await api('/api/bookings/check-out', 'POST', { booking_id: id, actor_id: actorId, now });
+  showToast(res.ok ? `🏁 ${res.message}` : `签退失败: ${res.message}`);
+  await loadState();
+  await loadTimeline();
+}
+
+async function cancelBooking(id, actorId) {
+  const now = document.getElementById('nowInput').value;
+  const res = await api('/api/bookings/cancel', 'POST', { booking_id: id, actor_id: actorId, now, reason: '工作台取消' });
+  showToast(res.ok ? `订单 ${id} 已取消 (违约金 ¥${res.record.penalty_fee})` : res.message);
+  await loadState();
+  await loadTimeline();
+}
+
+async function approveBooking(id, approve) {
+  const now = document.getElementById('nowInput').value;
+  const res = await api('/api/bookings/approve', 'POST', { booking_id: id, approver_id: 'admin', approve, now });
+  showToast(res.message);
+  await loadState();
+  await loadTimeline();
+}
+
+async function checkInBooking(id, actorId, startStr) {
+  const res = await api('/api/bookings/check-in', 'POST', { booking_id: id, actor_id: actorId, now: startStr });
+  showToast(res.message);
+  await loadState();
+  await loadTimeline();
+}
+
+async function triggerFault(resourceId) {
+  const rep = await api('/api/resources/fault', 'POST', {
+    resource_id: resourceId,
+    now: document.getElementById('nowInput').value,
+    reason: '硬件突发离线故障'
   });
-  renderTrace(res.trace || [], res.ok ? res.record.id : ("被拦截: " + res.error_code), !res.ok ? res.message : "");
-  showToast(res.ok ? `预约成功 [${res.record.id}] 状态: ${res.record.status}` : `预约拦截 [${res.error_code}]: ${res.message}`, !res.ok);
-  await refreshState(false);
+  showToast(`⚡ 资源故障已触发：无感自动换座 ${rep.reallocated.length} 单，全额退赔 ${rep.displaced.length} 单`);
+  await loadState();
+  await loadTimeline();
 }
 
-async function submitRecurring() {
-  const rids = getSelectedResources();
-  if (rids.length === 0) { showToast("请至少勾选一个资源", true); return; }
-  const res = await api("POST", "/api/book_recurring", {
-    actor_id: document.getElementById("actorSelect").value,
-    resource_ids: rids,
-    start_time: document.getElementById("startInput").value,
-    end_time: document.getElementById("endInput").value,
-    units: Number(document.getElementById("unitsInput").value || 1),
-    interval_days: 7,
-    occurrences: 3,
-    all_or_nothing: false
-  });
-  showToast(res.summary || "周期预约执行完成", !res.ok);
-  await refreshState(false);
+async function restoreRes(resourceId) {
+  await api('/api/resources/restore', 'POST', { resource_id: resourceId, now: document.getElementById('nowInput').value });
+  showToast(`🔧 资源 ${resourceId} 已修复上线`);
+  await loadState();
+  await loadTimeline();
 }
 
-function renderTrace(trace, titleLabel, errMsg = "") {
-  const box = document.getElementById("traceBox");
-  const totalUs = (trace || []).reduce((acc, s) => acc + Number(s.elapsed_us || 0), 0);
-  let html = `<div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-    <strong>🔬 积木决策轨迹透视 (${escapeHtml(titleLabel)})</strong>
-    <span style="font-family:monospace;font-size:11.5px;color:#60a5fa;">总耗时 ${totalUs.toFixed(1)} μs</span>
-  </div>`;
-  if (errMsg) {
-    html += `<div style="color:#f87171;font-size:12px;margin-bottom:6px;">❌ 拦截原因：${escapeHtml(errMsg)}</div>`;
-  }
-  (trace || []).forEach(t => {
-    const cls = t.outcome === "REJECT" ? "b-red" : (t.outcome === "WAITLIST" ? "b-amber" : (t.outcome === "MUTATED" || t.outcome === "APPROVAL_REQUIRED" ? "b-purple" : "b-green"));
-    html += `<div class="trace-row">
-      <span class="badge ${cls}" style="min-width:74px;text-align:center;">${t.outcome}</span>
-      <strong style="min-width:145px;">${escapeHtml(t.brick_name)}</strong>
-      <span style="flex:1;color:#cbd5e1;">${escapeHtml(t.note)}</span>
-      <span class="trace-us">${Number(t.elapsed_us || 0).toFixed(1)} μs</span>
-    </div>`;
-  });
-  box.innerHTML = html;
+async function runSweepNoShows() {
+  const now = prompt('请输入扫描基准时间 (超过开场宽限期未签到的订单将判定 NO_SHOW，超时未付锁座自动释放):', '2026-11-10 12:00');
+  if (!now) return;
+  const res = await api('/api/sweep-no-shows', 'POST', { now });
+  showToast(`已清理爽约 ${res.swept_count} 单，超时锁座 ${res.expired_holds_count} 单`);
+  await loadState();
+  await loadTimeline();
 }
 
-async function cancelBk(id, actorId) {
-  const res = await api("POST", "/api/cancel", { booking_id: id, actor_id: actorId, by_admin: false });
-  showToast(res.ok ? `已取消 ${id} (退款 ¥${Number(res.record.refund_amount).toFixed(2)})，候补队列已自动扫描递补！` : res.message, !res.ok);
-  await refreshState(false);
-}
-
-async function approveBk(id, approve) {
-  const res = await api("POST", "/api/approve", { booking_id: id, approver_id: "admin", approve });
-  showToast(res.message, !res.ok);
-  await refreshState(false);
-}
-
-async function checkinBk(id, actorId) {
-  const res = await api("POST", "/api/checkin", { booking_id: id, actor_id: actorId });
-  showToast(res.message, !res.ok);
-  await refreshState(false);
-}
-
-async function completeBk(id) {
-  const res = await api("POST", "/api/complete", { booking_id: id });
-  showToast(res.message, !res.ok);
-  await refreshState(false);
-}
-
-async function sweepNoShows() {
-  const res = await api("POST", "/api/sweep_noshows", { now: "2026-11-10 23:00" });
-  showToast(`已执行超时未签到清扫：释放爽约订单 ${res.swept_count} 笔，并自动递补候补队列！`);
-  await refreshState(false);
-}
-
-async function toggleFault(rid, action) {
-  const res = await api("POST", "/api/resource/fault", { resource_id: rid, action });
-  if (action === "fault" && res.report) {
-    const rCnt = (res.report.reallocated || []).length;
-    const dCnt = (res.report.displaced || []).length;
-    showToast(`⚠️ 资源 ${rid} 已标记故障：自动无感迁移 ${rCnt} 单，全额退赔 ${dCnt} 单！`);
-  } else {
-    showToast(`🔧 资源 ${rid} 已修复重新上线！`);
-  }
-  await refreshState(false);
-}
-
-async function suggestSlots() {
-  const datePart = (document.getElementById("startInput").value || "2026-11-10").slice(0, 10);
-  const res = await api("POST", "/api/suggest", {
-    actor_id: document.getElementById("actorSelect").value,
-    date: datePart,
+async function runSuggestSlots() {
+  const dateStr = document.getElementById('startInput').value.slice(0, 10);
+  const res = await api('/api/suggest', 'POST', {
+    actor_id: document.getElementById('actorSelect').value,
+    date: dateStr,
     duration_minutes: 60,
-    units: Number(document.getElementById("unitsInput").value || 1),
-    max_results: 5
+    units: Number(document.getElementById('unitsInput').value || 1),
+    now: document.getElementById('nowInput').value
   });
-  const box = document.getElementById("suggestionsBox");
-  box.style.display = "block";
+  const box = document.getElementById('suggestBox');
+  box.style.display = 'block';
   const list = res.suggestions || [];
-  if (list.length === 0) {
-    box.innerHTML = `<div style="font-size:12px;color:#fbbf24;">未找到该日期符合当前角色权限与配额的空闲时段</div>`;
+  if (!list.length) {
+    box.innerHTML = `<span style="color:var(--amber);">当日未找到满足当前用户权限与配额的可预约空闲时段</span>`;
     return;
   }
-  box.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">✨ 智能推荐可用时段 (点击一键填入表单):</div>` +
-    list.map(s => `<button class="preset-btn" style="margin:0 6px 6px 0;font-size:11.5px;" onclick="applySuggestion('${s.resource_id}','${s.start_time}','${s.end_time}')">
-      ${escapeHtml(s.resource_name)} · ${s.start_time.slice(11)}-${s.end_time.slice(11)} · ¥${Number(s.estimated_price).toFixed(0)}
-    </button>`).join("");
+  box.innerHTML = `<div style="font-weight:700;margin-bottom:6px;color:var(--cyan);">✨ 智能推荐最佳可约时段 (点击一键填入沙盒)：</div>` +
+    list.map(s => `
+      <div class="trace-step" style="cursor:pointer;" onclick="fillSlot('${s.resource_id}','${s.start_time}','${s.end_time}')">
+        <span class="badge cat-Pricing">评分 ${s.score}</span>
+        <strong>${s.resource_name}</strong>
+        <span>${s.start_time} ~ ${s.end_time.slice(11)}</span>
+        <span style="color:var(--muted);">${s.reason} · 预估 ¥${s.estimated_price}</span>
+      </div>
+    `).join('');
 }
 
-function applySuggestion(rid, st, et) {
-  document.getElementById("startInput").value = st;
-  document.getElementById("endInput").value = et;
-  document.querySelectorAll("#resCheckList input").forEach(i => { i.checked = (i.value === rid); });
-  showToast(`已填入推荐时段：${rid} (${st.slice(11)}-${et.slice(11)})`);
+function fillSlot(rid, st, et) {
+  document.getElementById('resSelect').value = rid;
+  document.getElementById('startInput').value = st;
+  document.getElementById('endInput').value = et;
+  showToast('已自动填入推荐时段与资源');
 }
 
-function insertBrickSnippet(sel) {
-  const val = sel.value;
-  sel.value = "";
-  if (!val) return;
-  const snippets = {
-    BufferTime: `\n        Brick.BufferTime {\n            pre_buffer_minutes = 0,\n            post_buffer_minutes = 15,\n            min_duration_to_apply = 60,\n        },\n`,
-    ApprovalWorkflow: `\n        Brick.ApprovalWorkflow {\n            duration_threshold_minutes = 120,\n            price_threshold = 200.0,\n            auto_approve_roles = { "admin" },\n        },\n`,
-    PartySizeMatcher: `\n        Brick.PartySizeMatcher {\n            min_units = 1,\n            max_units = 10,\n            min_capacity_ratio = 0.5,\n        },\n`,
-    LuaPolicy: `\n        Brick.LuaPolicy {\n            name = "CustomDynamicRule",\n            order = 60,\n            on_pre_book = function(ctx)\n                ctx.price = ctx.price * 0.9\n                ctx:add_note("限时活动 9 折优惠")\n                return true\n            end\n        },\n`
-  };
-  const ed = document.getElementById("luaEditor");
-  const marker = "bricks = {";
-  const idx = ed.value.indexOf(marker);
-  if (idx >= 0) {
-    const pos = idx + marker.length;
-    ed.value = ed.value.slice(0, pos) + snippets[val] + ed.value.slice(pos);
-    luaDirty = true;
-    showToast("已将 " + val + " 积木插入 bricks 流水线顶部，点击「热重载积木」立即生效！");
-  }
+async function refreshAll() {
+  await Promise.all([loadPipeline(), loadState(), loadTimeline()]);
 }
 
-init();
+(async function init() {
+  await loadBlueprints();
+  await refreshAll();
+})();
 </script>
 </body>
 </html>

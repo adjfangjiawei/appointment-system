@@ -1,4 +1,5 @@
 #include "chronokit/lua/lua_brick.hpp"
+#include "chronokit/core/timeline_index.hpp"
 
 extern "C" {
 #include <lauxlib.h>
@@ -91,6 +92,52 @@ int l_ctx_resource_has_tag(lua_State* L) {
     lua_pop(L, 1);
     lua_pushboolean(L, has ? 1 : 0);
     return 1;
+}
+
+// ctx:actor_completed_kind("safety_training") -> boolean
+int l_ctx_actor_completed_kind(lua_State* L) {
+    if (!lua_istable(L, 1)) { lua_pushboolean(L, 0); return 1; }
+    const char* kind = luaL_checkstring(L, 2);
+    lua_getfield(L, 1, "_completed_kinds");
+    bool has = false;
+    if (lua_istable(L, -1)) {
+        lua_getfield(L, -1, kind);
+        has = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    lua_pushboolean(L, has ? 1 : 0);
+    return 1;
+}
+
+// ctx:apply_discount(amount, note)
+int l_ctx_apply_discount(lua_State* L) {
+    if (!lua_istable(L, 1)) return 0;
+    double amt = luaL_checknumber(L, 2);
+    const char* note = luaL_optstring(L, 3, "");
+    lua_getfield(L, 1, "price");
+    double cur = lua_tonumber(L, -1);
+    lua_pop(L, 1);
+    double next_p = std::max(0.0, cur - amt);
+    lua_pushnumber(L, next_p);
+    lua_setfield(L, 1, "price");
+
+    lua_getfield(L, 1, "discount_amount");
+    double cur_d = lua_tonumber(L, -1);
+    lua_pop(L, 1);
+    lua_pushnumber(L, cur_d + (cur - next_p));
+    lua_setfield(L, 1, "discount_amount");
+
+    if (note && note[0] != '\0') {
+        lua_getfield(L, 1, "_notes");
+        if (lua_istable(L, -1)) {
+            lua_Integer n = luaL_len(L, -1);
+            lua_pushstring(L, note);
+            lua_rawseti(L, -2, n + 1);
+        }
+        lua_pop(L, 1);
+    }
+    return 0;
 }
 
 void push_actor_lua(lua_State* L, const Actor& actor) {
@@ -224,6 +271,8 @@ BrickVerdict LuaScriptBrick::on_pre_book(BookingContext& ctx) {
     // Mutable fields
     lua_pushnumber(L, ctx.price);
     lua_setfield(L, ctx_idx, "price");
+    lua_pushnumber(L, ctx.discount_amount);
+    lua_setfield(L, ctx_idx, "discount_amount");
     lua_pushnumber(L, ctx.deposit);
     lua_setfield(L, ctx_idx, "deposit");
     lua_pushinteger(L, ctx.priority);
@@ -234,6 +283,45 @@ BrickVerdict LuaScriptBrick::on_pre_book(BookingContext& ctx) {
     lua_setfield(L, ctx_idx, "post_buffer_minutes");
     lua_pushboolean(L, ctx.target_state == BookingState::PENDING_APPROVAL ? 1 : 0);
     lua_setfield(L, ctx_idx, "require_approval");
+
+    // Precompute rich live host state queries for Lua policies!
+    std::map<std::string, std::string> id_to_kind;
+    int total_kind_cap = 0, used_kind_cap = 0;
+    for (const auto& r : ctx.all_resources) {
+        id_to_kind[r.id] = r.kind;
+        if (r.status == ResourceStatus::ACTIVE && r.kind == ctx.primary_resource().kind) {
+            total_kind_cap += r.capacity;
+            used_kind_cap += std::min(r.capacity, TimelineIndex::peak_occupied_units(
+                ctx.existing_bookings, r.id, ctx.effective_start, ctx.effective_end, ctx.exclude_booking_id));
+        }
+    }
+    double occ_ratio = total_kind_cap > 0 ? static_cast<double>(used_kind_cap) / static_cast<double>(total_kind_cap) : 0.0;
+    lua_pushnumber(L, occ_ratio);
+    lua_setfield(L, ctx_idx, "kind_occupancy_ratio");
+
+    int completed_cnt = 0;
+    int daily_cancels = 0;
+    EpochMinute today_s = time_utils::start_of_day(ctx.now);
+    lua_createtable(L, 0, 4);
+    for (const auto& b : ctx.existing_bookings) {
+        if (b.actor_id != ctx.actor.id) continue;
+        if (b.status == BookingState::COMPLETED) {
+            ++completed_cnt;
+            std::string k = meta_get_string(b.metadata, "_primary_kind");
+            if (k.empty() && !b.primary_resource_id().empty()) k = id_to_kind[b.primary_resource_id()];
+            if (!k.empty()) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, k.c_str());
+            }
+        } else if (b.status == BookingState::CANCELLED && time_utils::start_of_day(b.updated_at) == today_s) {
+            ++daily_cancels;
+        }
+    }
+    lua_setfield(L, ctx_idx, "_completed_kinds");
+    lua_pushinteger(L, completed_cnt);
+    lua_setfield(L, ctx_idx, "actor_completed_count");
+    lua_pushinteger(L, daily_cancels);
+    lua_setfield(L, ctx_idx, "actor_daily_cancels");
 
     LuaVM::json_to_lua(L, meta_to_json(ctx.working_metadata));
     lua_setfield(L, ctx_idx, "metadata");
@@ -250,6 +338,10 @@ BrickVerdict LuaScriptBrick::on_pre_book(BookingContext& ctx) {
     lua_setfield(L, ctx_idx, "actor_has_role");
     lua_pushcfunction(L, l_ctx_resource_has_tag);
     lua_setfield(L, ctx_idx, "resource_has_tag");
+    lua_pushcfunction(L, l_ctx_actor_completed_kind);
+    lua_setfield(L, ctx_idx, "actor_completed_kind");
+    lua_pushcfunction(L, l_ctx_apply_discount);
+    lua_setfield(L, ctx_idx, "apply_discount");
 
     // Keep copy of ctx reference on stack so we can inspect mutations after pcall!
     lua_pushvalue(L, ctx_idx); // Stack: [fn, ctx, ctx] -> wait: pcall pops fn + args!
@@ -296,6 +388,10 @@ BrickVerdict LuaScriptBrick::on_pre_book(BookingContext& ctx) {
 
     lua_getfield(L, saved_ctx, "price");
     if (lua_isnumber(L, -1)) ctx.price = std::round(lua_tonumber(L, -1) * 100.0) / 100.0;
+    lua_pop(L, 1);
+
+    lua_getfield(L, saved_ctx, "discount_amount");
+    if (lua_isnumber(L, -1)) ctx.discount_amount = std::round(lua_tonumber(L, -1) * 100.0) / 100.0;
     lua_pop(L, 1);
 
     lua_getfield(L, saved_ctx, "deposit");

@@ -11,7 +11,7 @@ namespace chronokit {
 
 struct BrickParamSpec {
     std::string name;
-    std::string type; // "int", "double", "bool", "string", "array", "object"
+    std::string type; // "int", "double", "bool", "string", "array", "object", "brick"
     JsonValue default_value;
     std::string description;
 
@@ -32,17 +32,38 @@ struct BrickDescriptor {
     int order = 50;
     std::vector<BrickParamSpec> params;
     JsonValue current_config = JsonValue::object();
+    std::vector<BrickDescriptor> children; // Populated by Higher-Order Combinator Bricks!
+
+    BrickDescriptor() = default;
+    BrickDescriptor(
+        std::string t,
+        std::string cat,
+        std::string sum,
+        int ord,
+        std::vector<BrickParamSpec> p = {},
+        JsonValue cfg = JsonValue::object(),
+        std::vector<BrickDescriptor> ch = {})
+        : type_id(std::move(t))
+        , category(std::move(cat))
+        , summary(std::move(sum))
+        , order(ord)
+        , params(std::move(p))
+        , current_config(std::move(cfg))
+        , children(std::move(ch)) {}
 
     JsonValue to_json() const {
         JsonValue p_arr = JsonValue::array();
         for (const auto& p : params) p_arr.push_back(p.to_json());
+        JsonValue c_arr = JsonValue::array();
+        for (const auto& c : children) c_arr.push_back(c.to_json());
         return JsonValue::object({
             {"type_id", type_id},
             {"category", category},
             {"summary", summary},
             {"order", order},
             {"params", std::move(p_arr)},
-            {"current_config", current_config}
+            {"current_config", current_config},
+            {"children", std::move(c_arr)}
         });
     }
 };
@@ -50,24 +71,29 @@ struct BrickDescriptor {
 struct BookingContext {
     const BookingRequest& request;
     Actor actor;
-    std::vector<Resource> resources; // Matches request.resource_ids in order
+    std::vector<Resource> resources; // Mutable: ResourceLoadBalancerBrick can re-route primary resource!
+    const std::vector<Resource>& all_resources;
     const std::vector<BookingRecord>& existing_bookings;
     EpochMinute now = 0;
     bool dry_run = false;
+    std::string exclude_booking_id;  // Non-empty during atomic reschedule
 
     BookingContext(
         const BookingRequest& req,
         Actor act,
         std::vector<Resource> res,
+        const std::vector<Resource>& all_res,
         const std::vector<BookingRecord>& existing,
         EpochMinute now_val,
         bool is_dry_run)
         : request(req)
         , actor(std::move(act))
         , resources(std::move(res))
+        , all_resources(all_res)
         , existing_bookings(existing)
         , now(now_val)
         , dry_run(is_dry_run)
+        , exclude_booking_id(req.exclude_booking_id)
     {}
 
     // Mutable working fields shaped by Bricks along the pipeline
@@ -78,6 +104,8 @@ struct BookingContext {
     BookingState target_state = BookingState::CONFIRMED;
     int priority = 0;
     double price = 0.0;
+    double discount_amount = 0.0;
+    std::string coupon_code;
     double deposit = 0.0;
     std::string currency = "CNY";
     bool waitlist_enabled = false;
@@ -149,7 +177,6 @@ public:
 
     virtual BrickVerdict on_pre_check_in(CheckInContext& /*ctx*/) { return BrickVerdict::pass(); }
 
-    // Lifecycle policy queries used by background sweeps
     virtual std::optional<int> no_show_grace_minutes() const { return std::nullopt; }
     virtual int no_show_credit_deduction() const { return 0; }
     virtual int complete_credit_reward() const { return 0; }

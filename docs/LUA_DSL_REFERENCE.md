@@ -119,7 +119,47 @@ Brick.LuaPolicy {
 
 ---
 
-## 3. 沙箱安全保证
+## 3. 高阶组合子与可复用预制件 (`Brick.When` / `Brick.AnyOf` / `Brick.AllOf` / `Prefab.*`)
+
+v3.0 引入了函数式高阶积木组合子，支持任意层级嵌套编排：
+
+```lua
+-- 1. 条件分支组合子 Brick.When：不同人群/时段/资源标签走完全不同的积木策略
+Brick.When {
+    name = "ProCourtAccessCheck",
+    order = 30,
+    condition = {
+        resource_tags = { "pro_court" }, -- 支持 weekdays / actor_roles / resource_tags / min_units / start_from / start_to
+    },
+    -- 2. 逻辑『或』门组合子 Brick.AnyOf：满足任一子积木即放行（失败分支自动回滚上下文修改）
+    then_brick = Brick.AnyOf {
+        name = "GoldOrHighCreditGate",
+        bricks = {
+            Brick.RoleAndCreditGate { allowed_roles = { "arena_gold", "admin" } },
+            Brick.RoleAndCreditGate { min_credit_score = 115 },
+        }
+    },
+    else_brick = Brick.RoleAndCreditGate { min_credit_score = 60 }
+}
+
+-- 3. 一行调用内置预制件模组 Prefab.* (底层展开为 Brick.AllOf 复合包)
+Prefab.AntiScalperSuite {
+    name = "GovAntiScalperShield",
+    max_cancels = 2,
+    verified_attr = "real_name_verified",
+    cooldown_minutes = 30,
+}
+```
+
+此外，`Brick.LuaPolicy` 的 `ctx` 上下文在 v3.0 中新增了实时宿主状态查询方法：
+- `ctx.kind_occupancy_ratio`：当前请求资源所属类别在目标时段的实时并发负载率 (`0.0 ~ 1.0`)
+- `ctx.actor_completed_count` / `ctx.actor_daily_cancels`：当前用户历史完结单数与今日退单次数
+- `ctx:actor_completed_kind("safety_training")`：判断用户是否已完成指定类别的前置预约
+- `ctx:apply_discount(20.0, "专项补贴立减 ¥20")`：安全扣减订单价格并累加记录至 `discount_amount`
+
+---
+
+## 4. 沙箱安全保证
 
 - **安全标准库白名单**：仅开放 `base`, `table`, `string`, `math`, `utf8`；默认屏蔽 `io`, `os`, `loadfile`, `dofile` 等宿主机文件系统与进程调用。
 - **VM 指令配额防死循环保护**：每次调用 Lua 蓝图或策略函数均受 `500,000` 条虚拟机指令上限保护，一旦脚本存在死循环会在数毫秒内自动中断并返回安全错误码。

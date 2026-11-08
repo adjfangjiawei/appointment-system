@@ -81,6 +81,7 @@ private:
 
     void init_sandbox_and_dsl();
     void clear_hook_refs();
+    BrickPtr parse_single_brick(int brick_tbl_idx);
     BlueprintSpec parse_blueprint_table(int table_idx, const std::string& src_path, const std::string& raw_code);
 };
 

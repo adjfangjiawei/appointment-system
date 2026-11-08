@@ -1,4 +1,5 @@
 #include "chronokit/bricks/builtin_bricks.hpp"
+#include "chronokit/bricks/v3_bricks.hpp"
 #include "chronokit/core/timeline_index.hpp"
 
 #include <algorithm>
@@ -501,6 +502,7 @@ BrickVerdict QuotaLimiterBrick::on_pre_book(BookingContext& ctx) {
     int weekly_min = 0;
 
     for (const auto& b : ctx.existing_bookings) {
+        if (!ctx.exclude_booking_id.empty() && b.id == ctx.exclude_booking_id) continue;
         if (b.actor_id != ctx.actor.id) continue;
         bool active_or_waiting = occupies_capacity(b.status) || b.status == BookingState::WAITLISTED;
         if (!active_or_waiting) continue;
@@ -750,7 +752,8 @@ BrickVerdict ConflictAndCapacityBrick::on_pre_book(BookingContext& ctx) {
     }
 
     if (!allow_actor_overlap_) {
-        if (TimelineIndex::has_actor_overlap(ctx.existing_bookings, ctx.actor.id, ctx.request.start_time, ctx.request.end_time)) {
+        if (TimelineIndex::has_actor_overlap(
+                ctx.existing_bookings, ctx.actor.id, ctx.request.start_time, ctx.request.end_time, ctx.exclude_booking_id)) {
             return BrickVerdict::reject("ACTOR_TIME_CONFLICT", "您在该时间段内已有其他生效中的预约，不可重复占用");
         }
     }
@@ -769,7 +772,7 @@ BrickVerdict ConflictAndCapacityBrick::on_pre_book(BookingContext& ctx) {
             : exclusive_;
 
         int peak_used = TimelineIndex::peak_occupied_units(
-            ctx.existing_bookings, res.id, ctx.effective_start, ctx.effective_end);
+            ctx.existing_bookings, res.id, ctx.effective_start, ctx.effective_end, ctx.exclude_booking_id);
 
         bool capacity_exceeded = is_excl ? (peak_used > 0) : (peak_used + req_units > res.capacity);
 
@@ -798,7 +801,7 @@ BrickVerdict ConflictAndCapacityBrick::on_pre_book(BookingContext& ctx) {
 
     const auto& prim = ctx.primary_resource();
     int used_prim = TimelineIndex::peak_occupied_units(
-        ctx.existing_bookings, prim.id, ctx.effective_start, ctx.effective_end);
+        ctx.existing_bookings, prim.id, ctx.effective_start, ctx.effective_end, ctx.exclude_booking_id);
     return BrickVerdict::pass(
         "原子容量锁定就绪 (占用后 " + std::to_string(used_prim + ctx.request.units) + "/" + std::to_string(prim.capacity) +
         (ctx.resources.size() > 1 ? "，含绑定从属资源 " + std::to_string(ctx.resources.size() - 1) + " 项" : "") + ")");
@@ -977,6 +980,7 @@ BrickRegistry::BrickRegistry() {
     register_brick("ConflictAndCapacity", [](const JsonValue& c) { return std::make_shared<ConflictAndCapacityBrick>(c); });
     register_brick("ApprovalWorkflow", [](const JsonValue& c) { return std::make_shared<ApprovalWorkflowBrick>(c); });
     register_brick("CancellationAndCheckIn", [](const JsonValue& c) { return std::make_shared<CancellationAndCheckInBrick>(c); });
+    register_v3_bricks(*this);
 }
 
 BrickRegistry& BrickRegistry::instance() {

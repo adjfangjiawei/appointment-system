@@ -84,6 +84,7 @@ add_library(chronokit STATIC
     src/storage/memory_storage.cpp
     src/storage/sqlite_storage.cpp
     src/bricks/builtin_bricks.cpp
+    src/bricks/v3_bricks.cpp
     src/lua/lua_vm.cpp
     src/lua/lua_brick.cpp
     src/engine/appointment_engine.cpp

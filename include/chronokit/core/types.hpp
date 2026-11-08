@@ -180,11 +180,13 @@ enum class BookingState {
     CANCELLED = 5,
     REJECTED = 6,
     NO_SHOW = 7,
-    FAULT_DISPLACED = 8
+    FAULT_DISPLACED = 8,
+    PENDING_PAYMENT = 9
 };
 
 inline bool occupies_capacity(BookingState s) {
     return s == BookingState::PENDING_APPROVAL ||
+           s == BookingState::PENDING_PAYMENT ||
            s == BookingState::CONFIRMED ||
            s == BookingState::CHECKED_IN;
 }
@@ -200,12 +202,14 @@ inline std::string to_string(BookingState s) {
         case BookingState::REJECTED: return "REJECTED";
         case BookingState::NO_SHOW: return "NO_SHOW";
         case BookingState::FAULT_DISPLACED: return "FAULT_DISPLACED";
+        case BookingState::PENDING_PAYMENT: return "PENDING_PAYMENT";
     }
     return "CONFIRMED";
 }
 
 inline BookingState booking_state_from_string(const std::string& s) {
     if (s == "PENDING_APPROVAL") return BookingState::PENDING_APPROVAL;
+    if (s == "PENDING_PAYMENT") return BookingState::PENDING_PAYMENT;
     if (s == "CONFIRMED") return BookingState::CONFIRMED;
     if (s == "WAITLISTED") return BookingState::WAITLISTED;
     if (s == "CHECKED_IN") return BookingState::CHECKED_IN;
@@ -221,7 +225,7 @@ struct BrickDecision {
     std::string brick_name;
     std::string category;
     bool passed = true;
-    std::string outcome = "PASS"; // PASS, MUTATED, WAITLIST, APPROVAL_REQUIRED, REJECT
+    std::string outcome = "PASS";
     std::string note;
     double elapsed_us = 0.0;
 
@@ -250,14 +254,54 @@ struct BrickDecision {
 
 struct BookingRequest {
     std::string actor_id;
-    std::vector<std::string> resource_ids; // 1 for single resource, >1 for atomic bundle!
+    std::vector<std::string> resource_ids; // 1 for single resource, >1 for atomic bundle
     EpochMinute start_time = 0;
     EpochMinute end_time = 0;
-    int units = 1;                         // party size / seats requested
+    int units = 1;
     bool allow_waitlist = true;
     std::optional<EpochMinute> now_override;
     std::string series_id;
     MetadataMap metadata;
+    int hold_ttl_minutes = 0;       // >0 creates two-phase seat lock (PENDING_PAYMENT)
+    std::string exclude_booking_id; // Used during atomic reschedule to ignore self
+    std::string coupon_code;        // Optional coupon / voucher code
+
+    BookingRequest() = default;
+    BookingRequest(
+        std::string actor,
+        std::vector<std::string> res,
+        EpochMinute st,
+        EpochMinute et,
+        int u = 1,
+        bool wl = true,
+        std::optional<EpochMinute> now_opt = std::nullopt,
+        std::string series = "",
+        MetadataMap meta = {},
+        int hold_ttl = 0,
+        std::string excl_id = "",
+        std::string coupon = "")
+        : actor_id(std::move(actor))
+        , resource_ids(std::move(res))
+        , start_time(st)
+        , end_time(et)
+        , units(u)
+        , allow_waitlist(wl)
+        , now_override(now_opt)
+        , series_id(std::move(series))
+        , metadata(std::move(meta))
+        , hold_ttl_minutes(hold_ttl)
+        , exclude_booking_id(std::move(excl_id))
+        , coupon_code(std::move(coupon)) {}
+};
+
+struct RescheduleRequest {
+    std::string booking_id;
+    std::string actor_id;
+    EpochMinute new_start_time = 0;
+    EpochMinute new_end_time = 0;
+    std::vector<std::string> new_resource_ids; // Empty = keep current resources
+    std::optional<EpochMinute> now_override;
+    int max_reschedules_allowed = 3;
 };
 
 struct BookingRecord {
@@ -275,15 +319,22 @@ struct BookingRecord {
     BookingState status = BookingState::CONFIRMED;
     int priority = 0;
     double price = 0.0;
+    double discount_amount = 0.0;
+    std::string coupon_code;
     double deposit = 0.0;
+    double overtime_fee = 0.0;
     double refund_amount = 0.0;
     double penalty_fee = 0.0;
     std::string currency = "CNY";
     EpochMinute created_at = 0;
     EpochMinute updated_at = 0;
+    EpochMinute hold_expires_at = 0;
     EpochMinute checked_in_at = 0;
+    EpochMinute checked_out_at = 0;
+    int reschedule_count = 0;
     std::string cancel_reason;
     std::string reallocated_from;
+    std::string transferred_from;
     MetadataMap metadata;
     std::vector<BrickDecision> decision_trace;
 
@@ -313,7 +364,10 @@ struct BookingRecord {
         j["status"] = to_string(status);
         j["priority"] = priority;
         j["price"] = price;
+        j["discount_amount"] = discount_amount;
+        j["coupon_code"] = coupon_code;
         j["deposit"] = deposit;
+        j["overtime_fee"] = overtime_fee;
         j["refund_amount"] = refund_amount;
         j["penalty_fee"] = penalty_fee;
         j["currency"] = currency;
@@ -321,10 +375,16 @@ struct BookingRecord {
         j["updated_at"] = time_utils::format_datetime(updated_at);
         j["created_epoch_min"] = created_at;
         j["updated_epoch_min"] = updated_at;
+        j["hold_expires_epoch_min"] = hold_expires_at;
+        j["hold_expires_at"] = hold_expires_at > 0 ? time_utils::format_datetime(hold_expires_at) : "";
         j["checked_in_epoch_min"] = checked_in_at;
         j["checked_in_at"] = checked_in_at > 0 ? time_utils::format_datetime(checked_in_at) : "";
+        j["checked_out_epoch_min"] = checked_out_at;
+        j["checked_out_at"] = checked_out_at > 0 ? time_utils::format_datetime(checked_out_at) : "";
+        j["reschedule_count"] = reschedule_count;
         j["cancel_reason"] = cancel_reason;
         j["reallocated_from"] = reallocated_from;
+        j["transferred_from"] = transferred_from;
         j["metadata"] = meta_to_json(metadata);
         JsonValue trace_arr = JsonValue::array();
         for (const auto& d : decision_trace) trace_arr.push_back(d.to_json());
@@ -348,15 +408,22 @@ struct BookingRecord {
         b.status = booking_state_from_string(j["status"].as_string("CONFIRMED"));
         b.priority = static_cast<int>(j["priority"].as_int(0));
         b.price = j["price"].as_double(0.0);
+        b.discount_amount = j["discount_amount"].as_double(0.0);
+        b.coupon_code = j["coupon_code"].as_string();
         b.deposit = j["deposit"].as_double(0.0);
+        b.overtime_fee = j["overtime_fee"].as_double(0.0);
         b.refund_amount = j["refund_amount"].as_double(0.0);
         b.penalty_fee = j["penalty_fee"].as_double(0.0);
         b.currency = j["currency"].as_string("CNY");
         b.created_at = j["created_epoch_min"].as_int();
         b.updated_at = j["updated_epoch_min"].as_int();
+        b.hold_expires_at = j["hold_expires_epoch_min"].as_int(0);
         b.checked_in_at = j["checked_in_epoch_min"].as_int(0);
+        b.checked_out_at = j["checked_out_epoch_min"].as_int(0);
+        b.reschedule_count = static_cast<int>(j["reschedule_count"].as_int(0));
         b.cancel_reason = j["cancel_reason"].as_string();
         b.reallocated_from = j["reallocated_from"].as_string();
+        b.transferred_from = j["transferred_from"].as_string();
         b.metadata = json_to_meta(j["metadata"]);
         for (const auto& d : j["decision_trace"].as_array()) {
             b.decision_trace.push_back(BrickDecision::from_json(d));
@@ -393,8 +460,8 @@ struct FaultPolicy {
 
 struct FaultReportResult {
     std::string faulted_resource_id;
-    std::vector<std::pair<std::string, std::string>> reallocated; // booking_id -> new_resource_id
-    std::vector<std::string> displaced;                           // booking_ids marked FAULT_DISPLACED
+    std::vector<std::pair<std::string, std::string>> reallocated;
+    std::vector<std::string> displaced;
 
     JsonValue to_json() const {
         JsonValue r_arr = JsonValue::array();
@@ -437,9 +504,9 @@ struct SlotSuggestion {
 
 struct RecurringRequest {
     BookingRequest base_request;
-    int interval_days = 7;        // e.g. 1 = daily, 7 = weekly
+    int interval_days = 7;
     int occurrences = 4;
-    bool all_or_nothing = false;  // if true, rollback all if any single occurrence fails
+    bool all_or_nothing = false;
 };
 
 struct RecurringOutcome {

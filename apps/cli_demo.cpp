@@ -180,8 +180,48 @@ void run_showcase() {
     double ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
     double ops_per_sec = (iterations * 2.0) / (ms / 1000.0);
     std::printf("\n  [C++20 × Lua 5.4 性能压测] 完成 %d 次完整『11积木流水线预约 + 退订递补扫描』闭环:\n", iterations);
-    std::printf("    总耗时: %.2f ms | 平均单次操作延迟: %.1f us | 吞吐量: %.0f ops/sec\n\n",
+    std::printf("    总耗时: %.2f ms | 平均单次操作延迟: %.1f us | 吞吐量: %.0f ops/sec\n",
                 ms, (ms * 1000.0) / (iterations * 2.0), ops_per_sec);
+
+    // v3.0 Showcase: 06 EV Supercharger + 07 Gov Service Hall + 08 Sports Arena
+    std::cout << "\n====================================================================\n"
+              << "  [v3.0 新增场景] 06 超充站磨损均衡派桩 & 07 智慧政务前置链 & 08 体育馆高阶组合子\n"
+              << "====================================================================\n";
+
+    engine.load_blueprint_file("blueprints/06_ev_supercharger.lua");
+    BookingRequest ev1{"ev_owner_li", {"PILE-800V-A1"},
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        time_utils::must_parse_datetime("2026-11-10 11:00"),
+        1, true, sim_now, "", {}, 0, "", "EVFREE15"};
+    print_outcome("超充首单 (闲时谷电75折 × 品牌车主85折 × EVFREE15首充免15m券)", engine.book(ev1));
+
+    BookingRequest ev2{"ev_guest_zhou", {"PILE-800V-A1"},
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        time_utils::must_parse_datetime("2026-11-10 11:00"),
+        1, true, sim_now, "", {}};
+    auto ev2_out = engine.book(ev2);
+    print_outcome("同刻请求 A1 桩 -> 磨损均衡器自动无感派单至零磨损空闲桩 " + ev2_out.record.primary_resource_id(), ev2_out);
+
+    engine.load_blueprint_file("blueprints/07_gov_service_hall.lua");
+    BookingRequest prop_req{"cit_wang", {"WIN-PROP-01"},
+        time_utils::must_parse_datetime("2026-11-10 10:30"),
+        time_utils::must_parse_datetime("2026-11-10 11:00"),
+        1, true, sim_now, "", {}};
+    print_outcome("未办契税核定直接预约不动产过户 (被 DependencyChain 前置依赖链拦截)", engine.book(prop_req));
+    engine.book({"cit_wang", {"WIN-TAX-01"},
+        time_utils::must_parse_datetime("2026-11-10 09:30"),
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        1, true, sim_now, "", {}});
+    print_outcome("补齐 09:30 契税核定前置单后再次预约 10:30 不动产过户", engine.book(prop_req));
+
+    engine.load_blueprint_file("blueprints/08_sports_badminton_arena.lua");
+    BookingRequest pro_req{"plr_veteran", {"CRT-PRO-VIP"},
+        time_utils::must_parse_datetime("2026-11-10 14:00"),
+        time_utils::must_parse_datetime("2026-11-10 15:00"),
+        4, true, sim_now, "", {}, 15, "", "SPORT30"};
+    auto pro_out = engine.book(pro_req);
+    print_outcome("高信用球友通过 Brick.AnyOf 或门解锁赛事中心场 + 15分钟锁座 + SPORT30满减券", pro_out);
+    print_outcome("完成锁座支付转正 (PENDING_PAYMENT -> CONFIRMED)", engine.confirm_payment(pro_out.record.id, "plr_veteran", sim_now));
 }
 
 } // namespace

@@ -292,6 +292,240 @@ void test_blueprints_04_05_and_hot_reload_and_sqlite() {
     std::filesystem::remove(db_file);
 }
 
+void test_blueprint_06_ev_balancer_surge_and_cooldown() {
+    std::cout << "Running test_blueprint_06_ev_balancer_surge_and_cooldown...\n";
+    AppointmentEngine eng;
+    eng.load_blueprint_file("blueprints/06_ev_supercharger.lua", true);
+    CHECK(eng.list_resources().size() == 4);
+
+    // 1. First driver at 0% station load -> gets 0.75x valley discount + EVFREE15 coupon, assigned to PILE-800V-A1
+    BookingRequest r1;
+    r1.actor_id = "ev_owner_li";
+    r1.resource_ids = {"PILE-800V-A1"};
+    r1.start_time = time_utils::must_parse_datetime("2026-11-10 10:00");
+    r1.end_time = time_utils::must_parse_datetime("2026-11-10 11:00");
+    r1.coupon_code = "EVFREE15";
+    r1.now_override = time_utils::must_parse_datetime("2026-11-10 08:00");
+    auto o1 = eng.book(r1);
+    CHECK(o1.ok);
+    CHECK(o1.record.primary_resource_id() == "PILE-800V-A1");
+    CHECK(o1.record.discount_amount > 9.0);
+
+    // 2. CooldownInterval check: ev_owner_li tries to book at 11:15 (< 30m kind gap) on A2 -> blocked!
+    BookingRequest r_cool = r1;
+    r_cool.resource_ids = {"PILE-800V-A2"};
+    r_cool.coupon_code = "";
+    r_cool.start_time = time_utils::must_parse_datetime("2026-11-10 11:15");
+    r_cool.end_time = time_utils::must_parse_datetime("2026-11-10 12:00");
+    auto o_cool = eng.book(r_cool);
+    CHECK(!o_cool.ok && o_cool.error_code == "KIND_COOLDOWN_NOT_MET");
+
+    // 3. ResourceLoadBalancer check: ev_guest_zhou also requests PILE-800V-A1 at 10:00-11:00 -> auto-routed to PILE-800V-A2!
+    BookingRequest r2;
+    r2.actor_id = "ev_guest_zhou";
+    r2.resource_ids = {"PILE-800V-A1"};
+    r2.start_time = time_utils::must_parse_datetime("2026-11-10 10:00");
+    r2.end_time = time_utils::must_parse_datetime("2026-11-10 11:00");
+    r2.now_override = time_utils::must_parse_datetime("2026-11-10 08:05");
+    auto o2 = eng.book(r2);
+    CHECK(o2.ok && o2.record.primary_resource_id() == "PILE-800V-A2");
+
+    // 4. Add 3rd concurrent booking -> occupancy becomes 3/4 = 75%
+    eng.upsert_actor(Actor{"ev_driver_3", "Driver 3", {"driver"}, 100, {}});
+    BookingRequest r3 = r2;
+    r3.actor_id = "ev_driver_3";
+    auto o3 = eng.book(r3);
+    CHECK(o3.ok && o3.record.primary_resource_id() == "PILE-800V-A3");
+
+    // 5. At 75% load: LuaPolicy GridLoadBatteryGuard throttles commercial_fleet!
+    BookingRequest r_fleet = r2;
+    r_fleet.actor_id = "ev_fleet_01";
+    auto o_fleet = eng.book(r_fleet);
+    CHECK(!o_fleet.ok && o_fleet.error_code == "GRID_PEAK_THROTTLE");
+
+    //    Private driver 4 passes, gets A4, AND triggers DynamicSurgePricing 1.25x ($60 * 1.25 = $75)!
+    eng.upsert_actor(Actor{"ev_driver_4", "Driver 4", {"driver"}, 100, {}});
+    BookingRequest r4 = r2;
+    r4.actor_id = "ev_driver_4";
+    auto o4 = eng.book(r4);
+    CHECK(o4.ok && o4.record.primary_resource_id() == "PILE-800V-A4");
+    CHECK_NEAR(o4.record.price, 75.0, 1e-4);
+
+    // 6. Early check-out releases tail window and promotes waitlisted EV!
+    eng.upsert_actor(Actor{"ev_waiter", "EV Waiter", {"driver"}, 100, {}});
+    BookingRequest rw;
+    rw.actor_id = "ev_waiter";
+    rw.resource_ids = {"PILE-800V-A4"};
+    rw.start_time = time_utils::must_parse_datetime("2026-11-10 10:30");
+    rw.end_time = time_utils::must_parse_datetime("2026-11-10 11:00");
+    rw.allow_waitlist = true;
+    rw.metadata["pin_resource"] = true;
+    rw.now_override = time_utils::must_parse_datetime("2026-11-10 08:10");
+    auto ow = eng.book(rw);
+    CHECK(ow.ok && ow.record.status == BookingState::WAITLISTED);
+
+    // Driver 4 unplugs early at 10:25 -> frees 10:25..11:00 -> ev_waiter (10:30..11:00) immediately promoted!
+    auto co_early = eng.check_out_booking(o4.record.id, "ev_driver_4", time_utils::must_parse_datetime("2026-11-10 10:25"));
+    CHECK(co_early.ok && co_early.record.status == BookingState::COMPLETED);
+    CHECK(eng.get_booking(ow.record.id)->status == BookingState::CONFIRMED);
+}
+
+void test_blueprint_07_gov_prefab_dependency_and_when_combinator() {
+    std::cout << "Running test_blueprint_07_gov_prefab_dependency_and_when_combinator...\n";
+    AppointmentEngine eng;
+    eng.load_blueprint_file("blueprints/07_gov_service_hall.lua", true);
+
+    // 1. Prefab.AntiScalperSuite blocks unverified scalper account!
+    BookingRequest r_bot;
+    r_bot.actor_id = "scalper_bot";
+    r_bot.resource_ids = {"WIN-PASSPORT-01"};
+    r_bot.start_time = time_utils::must_parse_datetime("2026-11-10 09:00");
+    r_bot.end_time = time_utils::must_parse_datetime("2026-11-10 09:30");
+    r_bot.now_override = time_utils::must_parse_datetime("2026-11-09 10:00");
+    auto o_bot = eng.book(r_bot);
+    CHECK(!o_bot.ok && o_bot.error_code == "UNVERIFIED_IDENTITY");
+
+    // 2. DependencyChainBrick: cit_wang tries property_transfer without tax_assessment -> blocked!
+    BookingRequest r_prop;
+    r_prop.actor_id = "cit_wang";
+    r_prop.resource_ids = {"WIN-PROP-01"};
+    r_prop.start_time = time_utils::must_parse_datetime("2026-11-10 10:30");
+    r_prop.end_time = time_utils::must_parse_datetime("2026-11-10 11:00");
+    r_prop.now_override = time_utils::must_parse_datetime("2026-11-09 10:00");
+    auto o_dep_fail = eng.book(r_prop);
+    CHECK(!o_dep_fail.ok && o_dep_fail.error_code == "MISSING_PREREQUISITE_BOOKING");
+
+    //    Book prerequisite tax_assessment 09:30-10:00 -> property_transfer succeeds!
+    BookingRequest r_tax = r_prop;
+    r_tax.resource_ids = {"WIN-TAX-01"};
+    r_tax.start_time = time_utils::must_parse_datetime("2026-11-10 09:30");
+    r_tax.end_time = time_utils::must_parse_datetime("2026-11-10 10:00");
+    auto o_tax = eng.book(r_tax);
+    CHECK(o_tax.ok);
+    auto o_dep_ok = eng.book(r_prop);
+    CHECK(o_dep_ok.ok);
+
+    // 3. Brick.When conditional branch: cit_wang capped at 2 bookings by else_brick!
+    BookingRequest r_third = r_prop;
+    r_third.resource_ids = {"WIN-PASSPORT-01"};
+    r_third.start_time = time_utils::must_parse_datetime("2026-11-10 14:00");
+    r_third.end_time = time_utils::must_parse_datetime("2026-11-10 14:30");
+    auto o_third = eng.book(r_third);
+    CHECK(!o_third.ok && (o_third.error_code == "QUOTA_ACTIVE_EXCEEDED" || o_third.error_code == "QUOTA_DAILY_COUNT_EXCEEDED"));
+
+    //    Meanwhile cit_elder (senior_green_channel) hits then_brick and can book 3 slots on the same day!
+    for (int i = 0; i < 3; ++i) {
+        BookingRequest re;
+        re.actor_id = "cit_elder";
+        re.resource_ids = {"WIN-PASSPORT-01"};
+        re.start_time = time_utils::must_parse_datetime("2026-11-11 09:00") + i * 90;
+        re.end_time = re.start_time + 30;
+        re.now_override = time_utils::must_parse_datetime("2026-11-09 10:00");
+        CHECK(eng.book(re).ok);
+    }
+
+    // 4. AntiScalper frequent-cancel circuit breaker: cit_wang cancels 2 bookings today -> locked out!
+    eng.cancel_booking(o_tax.record.id, "cit_wang", time_utils::must_parse_datetime("2026-11-09 11:00"));
+    eng.cancel_booking(o_dep_ok.record.id, "cit_wang", time_utils::must_parse_datetime("2026-11-09 11:05"));
+    r_third.now_override = time_utils::must_parse_datetime("2026-11-09 11:10");
+    auto o_scalp_trip = eng.book(r_third);
+    CHECK(!o_scalp_trip.ok && o_scalp_trip.error_code == "SCALPER_CANCEL_CIRCUIT_OPEN");
+}
+
+void test_blueprint_08_anyof_hold_reschedule_transfer_checkout_and_cpp_export() {
+    std::cout << "Running test_blueprint_08_anyof_hold_reschedule_transfer_checkout_and_cpp_export...\n";
+    AppointmentEngine eng;
+    eng.load_blueprint_file("blueprints/08_sports_badminton_arena.lua", true);
+
+    // 1. Brick.When + Brick.AnyOf test on #pro_court:
+    BookingRequest r_pro;
+    r_pro.actor_id = "plr_casual";
+    r_pro.resource_ids = {"CRT-PRO-VIP"};
+    r_pro.start_time = time_utils::must_parse_datetime("2026-11-10 14:00");
+    r_pro.end_time = time_utils::must_parse_datetime("2026-11-10 15:00");
+    r_pro.now_override = time_utils::must_parse_datetime("2026-11-09 10:00");
+    auto o_casual = eng.book(r_pro);
+    CHECK(!o_casual.ok && o_casual.error_code == "ANY_OF_ALL_FAILED");
+
+    //    - plr_veteran (non-gold, credit 120 >= 115) -> PASSES via 2nd branch of AnyOf!
+    //      Plus Two-Phase Hold (15m TTL) + SPORT30 coupon ($120 - $30 = $90)!
+    r_pro.actor_id = "plr_veteran";
+    r_pro.coupon_code = "SPORT30";
+    r_pro.hold_ttl_minutes = 15;
+    auto o_vet = eng.book(r_pro);
+    CHECK(o_vet.ok);
+    CHECK(o_vet.record.status == BookingState::PENDING_PAYMENT);
+    CHECK_NEAR(o_vet.record.price, 130.0, 1e-4); // base_rate(120) + pro_court surcharge(40) - SPORT30(30) = 130
+    CHECK_NEAR(o_vet.record.discount_amount, 30.0, 1e-4);
+
+    //    - Confirm payment within 15m -> CONFIRMED!
+    auto o_paid = eng.confirm_payment(o_vet.record.id, "plr_veteran", time_utils::must_parse_datetime("2026-11-09 10:10"));
+    CHECK(o_paid.ok && o_paid.record.status == BookingState::CONFIRMED);
+
+    //    - Single-use coupon anti-replay: plr_veteran tries SPORT30 again -> blocked!
+    BookingRequest r_dup_cpn = r_pro;
+    r_dup_cpn.hold_ttl_minutes = 0;
+    r_dup_cpn.start_time = time_utils::must_parse_datetime("2026-11-11 14:00");
+    r_dup_cpn.end_time = time_utils::must_parse_datetime("2026-11-11 15:00");
+    auto o_dup_cpn = eng.book(r_dup_cpn);
+    CHECK(!o_dup_cpn.ok && o_dup_cpn.error_code == "COUPON_ALREADY_USED");
+
+    // 2. Put plr_gold on WAITLIST for 14:00-15:00 CRT-PRO-VIP
+    BookingRequest r_gold_wait = r_pro;
+    r_gold_wait.actor_id = "plr_gold";
+    r_gold_wait.coupon_code = "";
+    r_gold_wait.hold_ttl_minutes = 0;
+    r_gold_wait.allow_waitlist = true;
+    auto o_gw = eng.book(r_gold_wait);
+    CHECK(o_gw.ok && o_gw.record.status == BookingState::WAITLISTED);
+
+    // 3. Atomic Reschedule:
+    //    Invalid misaligned time (15:15) -> fails atomically, o_vet remains at 14:00-15:00!
+    RescheduleRequest rs_bad;
+    rs_bad.booking_id = o_vet.record.id;
+    rs_bad.actor_id = "plr_veteran";
+    rs_bad.new_start_time = time_utils::must_parse_datetime("2026-11-10 15:15");
+    rs_bad.new_end_time = time_utils::must_parse_datetime("2026-11-10 16:15");
+    rs_bad.now_override = time_utils::must_parse_datetime("2026-11-09 11:00");
+    CHECK(!eng.reschedule_booking(rs_bad).ok);
+    CHECK(eng.get_booking(o_vet.record.id)->start_time == time_utils::must_parse_datetime("2026-11-10 14:00"));
+
+    //    Valid reschedule to 16:00-17:00 -> moves o_vet AND auto-promotes plr_gold on old 14:00-15:00 slot!
+    RescheduleRequest rs_ok = rs_bad;
+    rs_ok.new_start_time = time_utils::must_parse_datetime("2026-11-10 16:00");
+    rs_ok.new_end_time = time_utils::must_parse_datetime("2026-11-10 17:00");
+    auto o_rs = eng.reschedule_booking(rs_ok);
+    CHECK(o_rs.ok && o_rs.record.reschedule_count == 1);
+    CHECK(eng.get_booking(o_gw.record.id)->status == BookingState::CONFIRMED);
+
+    // 4. Peer-to-Peer Transfer:
+    auto tf_bad = eng.transfer_booking(o_vet.record.id, "plr_veteran", "plr_casual", time_utils::must_parse_datetime("2026-11-09 12:00"));
+    CHECK(!tf_bad.ok && tf_bad.error_code == "TRANSFER_RECIPIENT_INELIGIBLE");
+
+    auto tf_ok = eng.transfer_booking(o_vet.record.id, "plr_veteran", "plr_gold", time_utils::must_parse_datetime("2026-11-09 12:05"));
+    CHECK(tf_ok.ok && tf_ok.record.actor_id == "plr_gold");
+
+    // 5. Overtime Check-Out Fee: plr_gold checks out 30 minutes late on 14:00-15:00 booking -> overtime fee charged!
+    auto co_late = eng.check_out_booking(o_gw.record.id, "plr_gold", time_utils::must_parse_datetime("2026-11-10 15:30"), 1.5);
+    CHECK(co_late.ok && co_late.record.overtime_fee > 0.0);
+
+    // 6. Expired seat hold sweeper test on CRT-STD-01
+    BookingRequest r_hold{"plr_casual", {"CRT-STD-01"},
+        time_utils::must_parse_datetime("2026-11-12 10:00"),
+        time_utils::must_parse_datetime("2026-11-12 11:00"),
+        2, true, time_utils::must_parse_datetime("2026-11-09 12:00"), "", {}, 10, "", ""};
+    auto o_hold = eng.book(r_hold);
+    CHECK(o_hold.ok && o_hold.record.status == BookingState::PENDING_PAYMENT);
+    auto exp = eng.sweep_expired_holds(time_utils::must_parse_datetime("2026-11-09 12:11"));
+    CHECK(exp.size() == 1 && exp[0] == o_hold.record.id);
+    CHECK(eng.get_booking(o_hold.record.id)->status == BookingState::CANCELLED);
+
+    // 7. C++20 EngineBuilder Code Exporter verification
+    std::string cpp_src = eng.export_cpp_builder_code();
+    CHECK(cpp_src.find("EngineBuilder()") != std::string::npos);
+    CHECK(cpp_src.find("CouponAndVoucher") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -302,9 +536,12 @@ int main() {
         test_blueprint_02_hospital_clinic();
         test_blueprint_03_enterprise_bundle_buffer_approval();
         test_blueprints_04_05_and_hot_reload_and_sqlite();
+        test_blueprint_06_ev_balancer_surge_and_cooldown();
+        test_blueprint_07_gov_prefab_dependency_and_when_combinator();
+        test_blueprint_08_anyof_hold_reschedule_transfer_checkout_and_cpp_export();
 
         std::cout << "\n======================================================\n"
-                  << "  ChronoKit Test Summary: " << g_passed << " passed, " << g_failed << " failed\n"
+                  << "  ChronoKit v3.0 Test Summary: " << g_passed << " passed, " << g_failed << " failed\n"
                   << "======================================================\n";
         return g_failed == 0 ? 0 : 1;
     } catch (const std::exception& ex) {
