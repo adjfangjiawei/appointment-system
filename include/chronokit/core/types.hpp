@@ -181,7 +181,9 @@ enum class BookingState {
     REJECTED = 6,
     NO_SHOW = 7,
     FAULT_DISPLACED = 8,
-    PENDING_PAYMENT = 9
+    PENDING_PAYMENT = 9,
+    LOTTERY_PENDING = 10,
+    LOTTERY_LOST = 11
 };
 
 inline bool occupies_capacity(BookingState s) {
@@ -203,6 +205,8 @@ inline std::string to_string(BookingState s) {
         case BookingState::NO_SHOW: return "NO_SHOW";
         case BookingState::FAULT_DISPLACED: return "FAULT_DISPLACED";
         case BookingState::PENDING_PAYMENT: return "PENDING_PAYMENT";
+        case BookingState::LOTTERY_PENDING: return "LOTTERY_PENDING";
+        case BookingState::LOTTERY_LOST: return "LOTTERY_LOST";
     }
     return "CONFIRMED";
 }
@@ -210,6 +214,8 @@ inline std::string to_string(BookingState s) {
 inline BookingState booking_state_from_string(const std::string& s) {
     if (s == "PENDING_APPROVAL") return BookingState::PENDING_APPROVAL;
     if (s == "PENDING_PAYMENT") return BookingState::PENDING_PAYMENT;
+    if (s == "LOTTERY_PENDING") return BookingState::LOTTERY_PENDING;
+    if (s == "LOTTERY_LOST") return BookingState::LOTTERY_LOST;
     if (s == "CONFIRMED") return BookingState::CONFIRMED;
     if (s == "WAITLISTED") return BookingState::WAITLISTED;
     if (s == "CHECKED_IN") return BookingState::CHECKED_IN;
@@ -523,6 +529,27 @@ struct RecurringOutcome {
             {"series_id", series_id},
             {"summary", summary},
             {"outcomes", std::move(arr)}
+        });
+    }
+};
+
+struct LotteryDrawResult {
+    uint64_t seed_used = 0;
+    std::vector<std::string> winners;
+    std::vector<std::string> losers;
+
+    JsonValue to_json() const {
+        JsonValue w_arr = JsonValue::array();
+        for (const auto& id : winners) w_arr.push_back(id);
+        JsonValue l_arr = JsonValue::array();
+        for (const auto& id : losers) l_arr.push_back(id);
+        return JsonValue::object({
+            {"ok", true},
+            {"seed_used", static_cast<int64_t>(seed_used)},
+            {"winners_count", winners.size()},
+            {"losers_count", losers.size()},
+            {"winners", std::move(w_arr)},
+            {"losers", std::move(l_arr)}
         });
     }
 };

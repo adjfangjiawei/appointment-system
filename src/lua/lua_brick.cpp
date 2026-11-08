@@ -326,6 +326,9 @@ BrickVerdict LuaScriptBrick::on_pre_book(BookingContext& ctx) {
     LuaVM::json_to_lua(L, meta_to_json(ctx.working_metadata));
     lua_setfield(L, ctx_idx, "metadata");
 
+    LuaVM::json_to_lua(L, meta_to_json(ctx.env_context));
+    lua_setfield(L, ctx_idx, "env");
+
     lua_createtable(L, 0, 0);
     lua_setfield(L, ctx_idx, "_notes");
 

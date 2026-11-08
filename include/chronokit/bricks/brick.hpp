@@ -71,12 +71,13 @@ struct BrickDescriptor {
 struct BookingContext {
     const BookingRequest& request;
     Actor actor;
-    std::vector<Resource> resources; // Mutable: ResourceLoadBalancerBrick can re-route primary resource!
+    std::vector<Resource> resources; // Mutable: LoadBalancer / StaffAssigner can route or bundle resources!
     const std::vector<Resource>& all_resources;
     const std::vector<BookingRecord>& existing_bookings;
     EpochMinute now = 0;
     bool dry_run = false;
-    std::string exclude_booking_id;  // Non-empty during atomic reschedule
+    std::string exclude_booking_id;  // Non-empty during atomic reschedule / extension
+    MetadataMap env_context;         // Live external environment/weather/IoT state
 
     BookingContext(
         const BookingRequest& req,
@@ -85,7 +86,8 @@ struct BookingContext {
         const std::vector<Resource>& all_res,
         const std::vector<BookingRecord>& existing,
         EpochMinute now_val,
-        bool is_dry_run)
+        bool is_dry_run,
+        MetadataMap env = {})
         : request(req)
         , actor(std::move(act))
         , resources(std::move(res))
@@ -94,6 +96,7 @@ struct BookingContext {
         , now(now_val)
         , dry_run(is_dry_run)
         , exclude_booking_id(req.exclude_booking_id)
+        , env_context(std::move(env))
     {}
 
     // Mutable working fields shaped by Bricks along the pipeline
@@ -102,6 +105,8 @@ struct BookingContext {
     int pre_buffer_minutes = 0;
     int post_buffer_minutes = 0;
     BookingState target_state = BookingState::CONFIRMED;
+    bool bypass_capacity_lock = false; // Set true by LotteryAndFairQueueBrick for LOTTERY_PENDING pool
+    bool actor_mutated = false;        // Set true when MembershipPassBrick updates actor attributes
     int priority = 0;
     double price = 0.0;
     double discount_amount = 0.0;
@@ -127,6 +132,8 @@ struct CancelContext {
     double penalty_fee = 0.0;
     double refund_amount = 0.0;
     std::vector<std::string> step_notes;
+    Actor booker_actor;                // Original owner actor (for pass/quota refund even when admin cancels)
+    bool booker_actor_mutated = false;
 
     void add_note(const std::string& n) { step_notes.push_back(n); }
 };

@@ -23,6 +23,7 @@ struct WorkingStateSnapshot {
     int pre_buffer_minutes;
     int post_buffer_minutes;
     BookingState target_state;
+    bool bypass_capacity_lock;
     int priority;
     double price;
     double discount_amount;
@@ -37,7 +38,7 @@ struct WorkingStateSnapshot {
         return {
             ctx.resources, ctx.effective_start, ctx.effective_end,
             ctx.pre_buffer_minutes, ctx.post_buffer_minutes,
-            ctx.target_state, ctx.priority, ctx.price, ctx.discount_amount,
+            ctx.target_state, ctx.bypass_capacity_lock, ctx.priority, ctx.price, ctx.discount_amount,
             ctx.coupon_code, ctx.deposit, ctx.waitlist_enabled,
             ctx.max_waitlist_per_slot, ctx.working_metadata, ctx.step_notes
         };
@@ -50,6 +51,7 @@ struct WorkingStateSnapshot {
         ctx.pre_buffer_minutes = pre_buffer_minutes;
         ctx.post_buffer_minutes = post_buffer_minutes;
         ctx.target_state = target_state;
+        ctx.bypass_capacity_lock = bypass_capacity_lock;
         ctx.priority = priority;
         ctx.price = price;
         ctx.discount_amount = discount_amount;

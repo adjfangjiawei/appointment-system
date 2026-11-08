@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <random>
 #include <sstream>
 
 namespace chronokit {
@@ -23,6 +24,10 @@ AppointmentEngine::AppointmentEngine(std::shared_ptr<IStorage> storage)
     : storage_(storage ? std::move(storage) : std::make_shared<MemoryStorage>())
     , lua_vm_(std::make_shared<LuaVM>())
 {
+    env_context_["weather"] = std::string("sunny");
+    env_context_["wind_level"] = int64_t(2);
+    env_context_["aqi"] = int64_t(45);
+
     event_bus_.subscribe([this](const DomainEvent& ev) {
         if (lua_vm_) lua_vm_->dispatch_event(ev);
     });
@@ -160,6 +165,16 @@ std::vector<BrickDescriptor> AppointmentEngine::available_brick_catalog() {
         JsonValue::object(), {}
     });
     cat.push_back({
+        "Unless", "Combinator",
+        "高阶豁免守卫组合子：除非满足豁免条件(如VIP/管理员/非高峰)，否则强制执行内部子积木",
+        45,
+        {
+            {"condition", "object", JsonValue::object(), "豁免条件 (weekdays/actor_roles/resource_tags/min_units)"},
+            {"brick", "brick", nullptr, "未豁免时执行的子积木"}
+        },
+        JsonValue::object(), {}
+    });
+    cat.push_back({
         "LuaPolicy", "Lua",
         "支持用 Lua 5.4 编写任意自定义业务规则、动态计价公式、实时负载查询与准入逻辑的可热更积木",
         60,
@@ -263,6 +278,38 @@ BookingOutcome AppointmentEngine::book(const BookingRequest& req) {
     return evaluate_and_book_locked(req, /*dry_run=*/false);
 }
 
+BookingOutcome AppointmentEngine::simulate_book(const BookingRequest& req) {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    auto out = evaluate_and_book_locked(req, /*dry_run=*/true);
+    if (out.ok) {
+        out.message = "[沙盒零副作用预演] 预计状态: " + to_string(out.record.status) +
+                      "，核定实付 ¥" + fmt_num2(out.record.price);
+    }
+    return out;
+}
+
+void AppointmentEngine::set_environment(const MetadataMap& env) {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    env_context_ = env;
+    event_bus_.publish({
+        "environment_updated", time_utils::now_local_minutes(), "", "", "",
+        "外部环境/气象状态已更新: weather=" + meta_get_string(env_context_, "weather", "sunny") +
+        ", wind=" + std::to_string(meta_get_int(env_context_, "wind_level", 2)) +
+        ", aqi=" + std::to_string(meta_get_int(env_context_, "aqi", 45)),
+        meta_to_json(env_context_)
+    });
+}
+
+void AppointmentEngine::set_env_var(const std::string& key, const MetaValue& val) {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    env_context_[key] = val;
+}
+
+MetadataMap AppointmentEngine::get_environment() const {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    return env_context_;
+}
+
 BookingOutcome AppointmentEngine::evaluate_and_book_locked(const BookingRequest& req, bool dry_run) {
     BookingOutcome out;
     if (req.resource_ids.empty()) {
@@ -308,7 +355,8 @@ BookingOutcome AppointmentEngine::evaluate_and_book_locked(const BookingRequest&
         all_resources,
         all_bookings,
         now,
-        dry_run
+        dry_run,
+        env_context_
     };
     ctx.effective_start = req.start_time;
     ctx.effective_end = req.end_time;
@@ -379,6 +427,9 @@ BookingOutcome AppointmentEngine::evaluate_and_book_locked(const BookingRequest&
         for (const auto& brick : bricks_) {
             brick->on_post_book(ctx, rec);
         }
+        if (ctx.actor_mutated) {
+            storage_->upsert_actor(ctx.actor);
+        }
         storage_->save_booking(rec);
 
         std::string ev_type = "booking_confirmed";
@@ -392,6 +443,9 @@ BookingOutcome AppointmentEngine::evaluate_and_book_locked(const BookingRequest&
         } else if (rec.status == BookingState::PENDING_PAYMENT) {
             ev_type = "booking_hold_locked";
             msg = "两阶段锁座成功待支付 [" + rec.id + "] (有效期至 " + time_utils::format_datetime(rec.hold_expires_at).substr(11) + ")";
+        } else if (rec.status == BookingState::LOTTERY_PENDING) {
+            ev_type = "booking_lottery_queued";
+            msg = "已登记进入公证摇号池 [" + rec.id + "] (权重=" + std::to_string(rec.priority) + ")：" + ctx.actor.name;
         }
 
         event_bus_.publish({
@@ -647,6 +701,266 @@ BookingOutcome AppointmentEngine::transfer_booking(
     return out;
 }
 
+BookingOutcome AppointmentEngine::extend_booking(
+    const std::string& booking_id,
+    const std::string& actor_id,
+    int extra_minutes,
+    std::optional<EpochMinute> now_opt)
+{
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    BookingOutcome out;
+    if (extra_minutes <= 0) {
+        out.error_code = "INVALID_EXTENSION";
+        out.message = "续时时长必须大于 0 分钟";
+        return out;
+    }
+
+    auto b_opt = storage_->get_booking(booking_id);
+    if (!b_opt) {
+        out.error_code = "BOOKING_NOT_FOUND";
+        out.message = "预约单不存在: " + booking_id;
+        return out;
+    }
+
+    BookingRecord orig = *b_opt;
+    if (orig.status != BookingState::CONFIRMED && orig.status != BookingState::CHECKED_IN) {
+        out.error_code = "INVALID_STATE_FOR_EXTEND";
+        out.message = "仅已确认或使用中订单支持在线续时 (当前: " + to_string(orig.status) + ")";
+        return out;
+    }
+
+    Actor actor = storage_->get_actor(actor_id).value_or(Actor{actor_id, actor_id, {}, 100, {}});
+    if (!actor.has_role("admin") && orig.actor_id != actor_id) {
+        out.error_code = "PERMISSION_DENIED";
+        out.message = "仅本人或管理员可申请续时";
+        return out;
+    }
+
+    EpochMinute now = now_opt.value_or(time_utils::now_local_minutes());
+
+    // Probe full extended duration excluding self so all bricks (OpeningHours, Granularity, Buffer, Capacity, Hierarchy) verify cleanly!
+    BookingRequest probe;
+    probe.actor_id = orig.actor_id;
+    probe.resource_ids = orig.resource_ids;
+    probe.start_time = orig.start_time;
+    probe.end_time = orig.end_time + extra_minutes;
+    probe.units = orig.units;
+    probe.allow_waitlist = false;
+    probe.now_override = std::min(now, orig.start_time);
+    probe.metadata = orig.metadata;
+    probe.metadata["pin_resource"] = true;
+    probe.metadata["skip_lottery"] = true;
+    probe.exclude_booking_id = orig.id;
+
+    BookingOutcome dry = evaluate_and_book_locked(probe, /*dry_run=*/true);
+    if (!dry.ok || dry.record.status == BookingState::WAITLISTED) {
+        out.error_code = dry.ok ? "EXTENSION_SLOT_OCCUPIED" : dry.error_code;
+        out.message = dry.ok ? "后续时段已被其他用户预订，无法无缝续时" : ("续时未通过校验: " + dry.message);
+        out.trace = dry.trace;
+        return out;
+    }
+
+    int orig_dur = std::max(1, static_cast<int>(orig.end_time - orig.start_time));
+    double add_fee = orig.price > 0.0
+        ? std::round((orig.price / orig_dur) * extra_minutes * 100.0) / 100.0
+        : std::max(0.0, dry.record.price);
+
+    orig.end_time = dry.record.end_time;
+    orig.effective_end = dry.record.effective_end;
+    orig.post_buffer_minutes = dry.record.post_buffer_minutes;
+    orig.price = std::round((orig.price + add_fee) * 100.0) / 100.0;
+    orig.updated_at = now;
+    orig.decision_trace.push_back({
+        "InSessionExtension", "Workflow", true, "EXTENDED",
+        "在线无缝续时 +" + std::to_string(extra_minutes) + " 分钟 -> 新结束时间 " +
+        time_utils::format_datetime(orig.end_time).substr(11) + " (补差价 +¥" + fmt_num2(add_fee) + ")",
+        0.0
+    });
+    storage_->save_booking(orig);
+
+    event_bus_.publish({
+        "booking_extended", now, orig.id, orig.primary_resource_id(), orig.actor_id,
+        "订单 [" + orig.id + "] 在线续时 +" + std::to_string(extra_minutes) + " 分钟成功",
+        JsonValue::object({{"extra_minutes", extra_minutes}, {"added_fee", add_fee}})
+    });
+
+    out.ok = true;
+    out.message = "续时 +" + std::to_string(extra_minutes) + " 分钟成功";
+    out.record = orig;
+    out.trace = orig.decision_trace;
+    return out;
+}
+
+LotteryDrawResult AppointmentEngine::draw_lottery(
+    const std::string& resource_id_filter,
+    std::optional<EpochMinute> now_opt,
+    uint64_t seed_override)
+{
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    LotteryDrawResult res;
+    res.seed_used = seed_override != 0
+        ? seed_override
+        : static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    EpochMinute now = now_opt.value_or(time_utils::now_local_minutes());
+    auto all_resources = storage_->list_resources();
+    auto all = storage_->list_bookings();
+
+    bool global_excl = false;
+    bool has_subdivision_lock = false;
+    for (const auto& b : bricks_) {
+        if (b->is_exclusive_mode()) global_excl = true;
+        if (b->type_id() == "HierarchicalTreeLock") {
+            auto hb = std::dynamic_pointer_cast<HierarchicalTreeLockBrick>(b);
+            if (hb && hb->mode() == "exclusive_subdivision") has_subdivision_lock = true;
+        }
+    }
+
+    struct WeightedTicket {
+        double key;
+        BookingRecord rec;
+    };
+    std::vector<WeightedTicket> pool;
+    std::mt19937_64 rng(res.seed_used);
+    std::uniform_real_distribution<double> dist(1e-9, 1.0 - 1e-9);
+
+    for (const auto& b : all) {
+        if (b.status != BookingState::LOTTERY_PENDING) continue;
+        if (!resource_id_filter.empty() && b.primary_resource_id() != resource_id_filter) continue;
+        double w = static_cast<double>(std::max<int64_t>(1, meta_get_int(b.metadata, "_lottery_weight", std::max(1, b.priority))));
+        // Efraimidis-Spirakis exact weighted sampling key: U^(1/w)
+        double key = std::pow(dist(rng), 1.0 / w);
+        pool.push_back({key, b});
+    }
+
+    std::sort(pool.begin(), pool.end(), [](const WeightedTicket& a, const WeightedTicket& b) {
+        if (a.key != b.key) return a.key > b.key;
+        return a.rec.id < b.rec.id;
+    });
+
+    for (auto& item : pool) {
+        auto latest = storage_->list_bookings();
+        auto& cand = item.rec;
+        bool fits = !TimelineIndex::has_actor_overlap(latest, cand.actor_id, cand.start_time, cand.end_time, cand.id);
+
+        if (fits) {
+            for (size_t i = 0; i < cand.resource_ids.size(); ++i) {
+                auto r_opt = storage_->get_resource(cand.resource_ids[i]);
+                if (!r_opt || r_opt->status != ResourceStatus::ACTIVE) { fits = false; break; }
+                int req_u = (i == 0) ? cand.units : 1;
+                bool is_excl = r_opt->attributes.count("exclusive")
+                    ? meta_get_bool(r_opt->attributes, "exclusive", global_excl)
+                    : global_excl;
+                int used = TimelineIndex::peak_occupied_units(latest, r_opt->id, cand.effective_start, cand.effective_end, cand.id);
+                if (is_excl ? (used > 0) : (used + req_u > r_opt->capacity)) { fits = false; break; }
+                if (has_subdivision_lock && HierarchicalTreeLockBrick::check_subdivision_conflict(
+                        r_opt->id, cand.effective_start, cand.effective_end, all_resources, latest, cand.id))
+                {
+                    fits = false;
+                    break;
+                }
+            }
+        }
+
+        if (fits) {
+            cand.status = BookingState::CONFIRMED;
+            cand.updated_at = now;
+            cand.decision_trace.push_back({
+                "FairLotteryDraw", "Workflow", true, "LOTTERY_WON",
+                "公证摇号中签确认 (公证随机种子=" + std::to_string(res.seed_used) + ")", 0.0
+            });
+            storage_->save_booking(cand);
+            res.winners.push_back(cand.id);
+        } else {
+            cand.status = BookingState::LOTTERY_LOST;
+            cand.refund_amount = cand.price;
+            cand.updated_at = now;
+
+            // Refund any prepaid MembershipPass credits automatically on lottery loss!
+            int64_t pass_deducted = meta_get_int(cand.metadata, "_pass_deducted", 0);
+            if (pass_deducted > 0) {
+                std::string p_attr = meta_get_string(cand.metadata, "_pass_attr", "pass_credits");
+                if (auto act_opt = storage_->get_actor(cand.actor_id)) {
+                    Actor act = *act_opt;
+                    act.attributes[p_attr] = meta_get_int(act.attributes, p_attr, 0) + pass_deducted;
+                    storage_->upsert_actor(act);
+                    cand.metadata["_pass_refunded"] = pass_deducted;
+                    cand.metadata["_pass_deducted"] = int64_t(0);
+                }
+            }
+
+            cand.decision_trace.push_back({
+                "FairLotteryDraw", "Workflow", false, "LOTTERY_LOST",
+                "公证摇号未中签，已自动全额退还费用/次卡额度 (种子=" + std::to_string(res.seed_used) + ")", 0.0
+            });
+            storage_->save_booking(cand);
+            res.losers.push_back(cand.id);
+        }
+    }
+
+    event_bus_.publish({
+        "lottery_drawn", now, "", resource_id_filter, "",
+        "公证摇号开奖完成 (种子=" + std::to_string(res.seed_used) + ")：中签 " +
+        std::to_string(res.winners.size()) + " 单，未中签自动退赔 " + std::to_string(res.losers.size()) + " 单",
+        res.to_json()
+    });
+
+    return res;
+}
+
+namespace {
+std::string fmt_ics_dt(EpochMinute m) {
+    // "YYYY-MM-DD HH:MM" -> "YYYYMMDDTHHMM00"
+    std::string s = time_utils::format_datetime(m);
+    if (s.size() < 16) return "20261110T090000";
+    return s.substr(0, 4) + s.substr(5, 2) + s.substr(8, 2) + "T" + s.substr(11, 2) + s.substr(14, 2) + "00";
+}
+
+void append_ics_vevent(std::ostringstream& oss, const BookingRecord& b, const std::string& sys_name) {
+    std::string loc;
+    for (size_t i = 0; i < b.resource_ids.size(); ++i) {
+        if (i > 0) loc += " + ";
+        loc += b.resource_ids[i];
+    }
+    oss << "BEGIN:VEVENT\r\n"
+        << "UID:" << b.id << "@chronokit.local\r\n"
+        << "DTSTAMP:" << fmt_ics_dt(b.updated_at > 0 ? b.updated_at : b.start_time) << "\r\n"
+        << "DTSTART:" << fmt_ics_dt(b.start_time) << "\r\n"
+        << "DTEND:" << fmt_ics_dt(b.end_time) << "\r\n"
+        << "SUMMARY:[" << sys_name << "] 预约 " << loc << " (" << to_string(b.status) << ")\r\n"
+        << "LOCATION:" << loc << "\r\n"
+        << "DESCRIPTION:单号: " << b.id << "\\n预约人: " << b.actor_id
+        << "\\n状态: " << to_string(b.status) << "\\n实付金额: " << b.currency << " " << fmt_num2(b.price) << "\r\n"
+        << "END:VEVENT\r\n";
+}
+} // namespace
+
+std::string AppointmentEngine::export_booking_ics(const std::string& booking_id) const {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    auto b_opt = storage_->get_booking(booking_id);
+    if (!b_opt) return "";
+    std::ostringstream oss;
+    oss << "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ChronoKit//v4.0//CN\r\nCALSCALE:GREGORIAN\r\n";
+    append_ics_vevent(oss, *b_opt, active_bp_.name);
+    oss << "END:VCALENDAR\r\n";
+    return oss.str();
+}
+
+std::string AppointmentEngine::export_actor_ics(const std::string& actor_id) const {
+    std::lock_guard<std::recursive_mutex> lk(mu_);
+    std::ostringstream oss;
+    oss << "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ChronoKit//v4.0//CN\r\nCALSCALE:GREGORIAN\r\n";
+    for (const auto& b : storage_->list_bookings()) {
+        if (b.actor_id == actor_id &&
+            (occupies_capacity(b.status) || b.status == BookingState::WAITLISTED || b.status == BookingState::LOTTERY_PENDING))
+        {
+            append_ics_vevent(oss, b, active_bp_.name);
+        }
+    }
+    oss << "END:VCALENDAR\r\n";
+    return oss.str();
+}
+
 RecurringOutcome AppointmentEngine::book_recurring(const RecurringRequest& req) {
     std::lock_guard<std::recursive_mutex> lk(mu_);
     RecurringOutcome res;
@@ -708,13 +1022,16 @@ BookingOutcome AppointmentEngine::cancel_booking(
     }
 
     BookingRecord rec = *b_opt;
-    if (rec.status == BookingState::CANCELLED || rec.status == BookingState::COMPLETED || rec.status == BookingState::NO_SHOW) {
+    if (rec.status == BookingState::CANCELLED || rec.status == BookingState::COMPLETED ||
+        rec.status == BookingState::NO_SHOW || rec.status == BookingState::LOTTERY_LOST)
+    {
         out.error_code = "INVALID_STATE_FOR_CANCEL";
         out.message = "当前订单状态(" + to_string(rec.status) + ")不可取消";
         return out;
     }
 
     Actor actor = storage_->get_actor(actor_id).value_or(Actor{actor_id, actor_id, {}, 100, {}});
+    Actor booker = storage_->get_actor(rec.actor_id).value_or(Actor{rec.actor_id, rec.actor_id, {}, 100, {}});
     bool is_admin = by_admin || actor.has_role("admin");
     if (!is_admin && rec.actor_id != actor_id) {
         out.error_code = "PERMISSION_DENIED";
@@ -723,9 +1040,9 @@ BookingOutcome AppointmentEngine::cancel_booking(
     }
 
     EpochMinute now = now_opt.value_or(time_utils::now_local_minutes());
-    CancelContext ctx{rec, actor, now, reason, is_admin, 0.0, rec.price, {}};
+    CancelContext ctx{rec, actor, now, reason, is_admin, 0.0, rec.price, {}, booker, false};
 
-    if (rec.status != BookingState::PENDING_PAYMENT) {
+    if (rec.status != BookingState::PENDING_PAYMENT && rec.status != BookingState::LOTTERY_PENDING) {
         for (const auto& brick : bricks_) {
             auto t0 = std::chrono::steady_clock::now();
             BrickVerdict v = brick->on_pre_cancel(ctx);
@@ -741,7 +1058,7 @@ BookingOutcome AppointmentEngine::cancel_booking(
         }
     } else {
         ctx.penalty_fee = 0.0;
-        ctx.refund_amount = 0.0;
+        ctx.refund_amount = rec.status == BookingState::LOTTERY_PENDING ? rec.price : 0.0;
     }
 
     bool freed_capacity = occupies_capacity(rec.status);
@@ -755,6 +1072,9 @@ BookingOutcome AppointmentEngine::cancel_booking(
     }
 
     for (const auto& brick : bricks_) brick->on_post_cancel(ctx, rec);
+    if (ctx.booker_actor_mutated) {
+        storage_->upsert_actor(ctx.booker_actor);
+    }
     storage_->save_booking(rec);
 
     event_bus_.publish({
@@ -992,12 +1312,18 @@ BookingOutcome AppointmentEngine::complete_booking(
 std::vector<std::string> AppointmentEngine::try_promote_waitlist_locked(EpochMinute now) {
     bool should_promote = false;
     bool global_excl = false;
+    bool has_subdivision_lock = false;
     for (const auto& b : bricks_) {
         if (b->auto_promote_waitlist()) should_promote = true;
         if (b->is_exclusive_mode()) global_excl = true;
+        if (b->type_id() == "HierarchicalTreeLock") {
+            auto hb = std::dynamic_pointer_cast<HierarchicalTreeLockBrick>(b);
+            if (hb && hb->mode() == "exclusive_subdivision") has_subdivision_lock = true;
+        }
     }
     if (!should_promote) return {};
 
+    auto all_resources = storage_->list_resources();
     auto all = storage_->list_bookings();
     std::vector<BookingRecord> candidates;
     for (const auto& b : all) {
@@ -1036,6 +1362,12 @@ std::vector<std::string> AppointmentEngine::try_promote_waitlist_locked(EpochMin
                 int used = TimelineIndex::peak_occupied_units(
                     latest_all, r_opt->id, cand.effective_start, cand.effective_end, cand.id);
                 if (is_excl ? (used > 0) : (used + req_u > r_opt->capacity)) {
+                    fits = false;
+                    break;
+                }
+                if (has_subdivision_lock && HierarchicalTreeLockBrick::check_subdivision_conflict(
+                        r_opt->id, cand.effective_start, cand.effective_end, all_resources, latest_all, cand.id))
+                {
                     fits = false;
                     break;
                 }
@@ -1389,7 +1721,7 @@ JsonValue AppointmentEngine::timeline_matrix(const std::string& date_str) const 
     for (const auto& r : resources) {
         JsonValue blocks = JsonValue::array();
         for (const auto& b : bookings) {
-            if (!occupies_capacity(b.status) && b.status != BookingState::WAITLISTED) continue;
+            if (!occupies_capacity(b.status) && b.status != BookingState::WAITLISTED && b.status != BookingState::LOTTERY_PENDING) continue;
             bool uses = std::find(b.resource_ids.begin(), b.resource_ids.end(), r.id) != b.resource_ids.end();
             if (!uses) continue;
             if (std::max(day_s, b.effective_start) < std::min(day_e, b.effective_end)) {

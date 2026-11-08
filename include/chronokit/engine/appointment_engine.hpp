@@ -3,6 +3,7 @@
 #include "chronokit/bricks/brick.hpp"
 #include "chronokit/bricks/builtin_bricks.hpp"
 #include "chronokit/bricks/v3_bricks.hpp"
+#include "chronokit/bricks/v4_bricks.hpp"
 #include "chronokit/core/event_bus.hpp"
 #include "chronokit/core/types.hpp"
 #include "chronokit/lua/lua_vm.hpp"
@@ -45,9 +46,32 @@ public:
     std::optional<Actor> get_actor(const std::string& id) const;
     std::vector<Actor> list_actors() const;
 
-    // Core & v3 Lifecycle Booking Operations
+    // Core, v3 & v4 Lifecycle Booking Operations
     BookingOutcome book(const BookingRequest& req);
+    BookingOutcome simulate_book(const BookingRequest& req); // Zero-side-effect What-If dry-run!
     RecurringOutcome book_recurring(const RecurringRequest& req);
+
+    // Live External Environment / Weather / IoT Sensor Context
+    void set_environment(const MetadataMap& env);
+    void set_env_var(const std::string& key, const MetaValue& val);
+    MetadataMap get_environment() const;
+
+    // Live In-Session Extension (续时加钟: atomic tail conflict & hierarchy check!)
+    BookingOutcome extend_booking(
+        const std::string& booking_id,
+        const std::string& actor_id,
+        int extra_minutes,
+        std::optional<EpochMinute> now_opt = std::nullopt);
+
+    // Fair Auditable Public Lottery Draw (公证摇号抽签: weighted Efraimidis-Spirakis sampling!)
+    LotteryDrawResult draw_lottery(
+        const std::string& resource_id_filter = "",
+        std::optional<EpochMinute> now_opt = std::nullopt,
+        uint64_t seed_override = 0);
+
+    // RFC 5545 Standard iCalendar (.ics) Exporter
+    std::string export_booking_ics(const std::string& booking_id) const;
+    std::string export_actor_ics(const std::string& actor_id) const;
 
     // Two-phase seat hold confirmation (PENDING_PAYMENT -> CONFIRMED)
     BookingOutcome confirm_payment(
@@ -133,6 +157,7 @@ private:
     std::shared_ptr<LuaVM> lua_vm_;
     std::vector<BrickPtr> bricks_;
     BlueprintSpec active_bp_;
+    MetadataMap env_context_;
     EventBus event_bus_;
     uint64_t series_seq_ = 100;
 

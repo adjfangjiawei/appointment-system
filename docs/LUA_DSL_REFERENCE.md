@@ -156,6 +156,52 @@ Prefab.AntiScalperSuite {
 - `ctx.actor_completed_count` / `ctx.actor_daily_cancels`：当前用户历史完结单数与今日退单次数
 - `ctx:actor_completed_kind("safety_training")`：判断用户是否已完成指定类别的前置预约
 - `ctx:apply_discount(20.0, "专项补贴立减 ¥20")`：安全扣减订单价格并累加记录至 `discount_amount`
+- `ctx.env` (v4.0)：只读实时环境与 IoT 传感器字典（如 `ctx.env.weather`, `ctx.env.wind_level`, `ctx.env.aqi`）
+
+---
+
+## 3.5 蓝图多继承 (`Mixin` / `MixinCatalog`) 与豁免组合子 (`Brick.Unless`) (v4.0)
+
+### 蓝图 Mixin 继承、同名覆写与按需裁剪
+
+```lua
+return Blueprint {
+    id = "convention_hall",
+    name = "可拆分会展中心",
+    -- 1. 组合多套基础底座 Mixin
+    mixins = {
+        MixinCatalog.StandardBusinessHours("08:30", "21:30", 60),
+        MixinCatalog.EnterpriseReliability(),
+    },
+    -- 2. 按需剔除继承链中不需要的积木类型
+    exclude_bricks = { "BookingWindow" },
+
+    -- 3. 子蓝图同名积木会自动覆写 Mixin 中的默认配置，新增积木按拓扑顺序自动织入流水线
+    bricks = {
+        Brick.HierarchicalTreeLock { mode = "strict_subdivision" },
+        Brick.CompanionStaffAssigner {
+            resource_to_staff_kind = { convention_hall = "av_engineer" },
+        },
+        Brick.Unless {
+            name = "VIPQuotaExemption",
+            condition = { actor_has_any_role = { "vip", "organizer" } },
+            brick = Brick.QuotaLimiter { max_per_day = 2 }
+        },
+    }
+}
+```
+
+### 资源父子空间树 (`parent_id`)
+
+在 `resources` 中声明 `parent_id` 即可构建任意层级的空间拆分拓扑树（配合 `Brick.HierarchicalTreeLock` 自动维护双向互斥锁）：
+
+```lua
+resources = {
+    { id = "HALL-GRAND", name = "全场无柱大宴会厅", kind = "hall", capacity = 500 },
+    { id = "HALL-SOUTH", name = "南翼分厅", kind = "hall", capacity = 250, parent_id = "HALL-GRAND" },
+    { id = "ROOM-VIP-S1", name = "南翼要客沙龙室 S1", kind = "hall", capacity = 80, parent_id = "HALL-SOUTH" },
+}
+```
 
 ---
 

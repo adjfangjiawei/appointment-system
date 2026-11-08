@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ChronoKit Studio v3.0 — 时序积木可组合预约组件工作台</title>
+<title>ChronoKit Studio v4.0 — 时序积木可组合预约组件工作台</title>
 <style>
   :root {
     --bg: #0b1020;
@@ -183,9 +183,10 @@
   .st-WAITLISTED { color: #fcd34d; font-weight: 700; }
   .st-PENDING_APPROVAL { color: #c4b5fd; font-weight: 700; }
   .st-PENDING_PAYMENT { color: #f9a8d4; font-weight: 700; }
+  .st-LOTTERY_PENDING { color: #fde047; font-weight: 700; }
   .st-CHECKED_IN { color: #67e8f9; font-weight: 700; }
   .st-COMPLETED { color: #93c5fd; font-weight: 700; }
-  .st-CANCELLED, .st-REJECTED, .st-NO_SHOW, .st-FAULT_DISPLACED { color: #fca5a5; }
+  .st-CANCELLED, .st-REJECTED, .st-NO_SHOW, .st-FAULT_DISPLACED, .st-LOTTERY_LOST { color: #fca5a5; }
 
   .trace-box {
     background: #0b1122;
@@ -279,6 +280,7 @@
   .bar-PENDING_APPROVAL { background: rgba(168,85,247,0.8); }
   .bar-CHECKED_IN { background: rgba(6,182,212,0.85); }
   .bar-WAITLISTED { background: rgba(245,158,11,0.55); border: 1px dashed #fcd34d; }
+  .bar-LOTTERY_PENDING { background: rgba(234,179,8,0.5); border: 1px dotted #fde047; }
   .bar-COMPLETED { background: rgba(79,140,255,0.65); }
 
   .event-feed { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
@@ -318,8 +320,8 @@
   <div class="brand">
     <div class="logo-cube">CK</div>
     <div>
-      <h1>ChronoKit Studio v3.0 · 时序积木工作台</h1>
-      <p>C++20 高性能微内核 + Lua 5.4 高阶组合子/预制件热更 · 22 种可插拔积木组装任意行业预约系统</p>
+      <h1>ChronoKit Studio v4.0 · 时序积木工作台</h1>
+      <p>C++20 微内核 + Lua 5.4 Mixin/组合子热更 · 29 种积木原语 + 父子拓扑锁 + 公证摇号 + 气象感知 + C ABI</p>
     </div>
   </div>
   <div class="blueprint-bar">
@@ -347,7 +349,7 @@
 
       <div class="card">
         <div class="card-title">
-          <span>📦 ChronoKit 全量积木仓库 (22 种原语 + 组合子)</span>
+          <span>📦 ChronoKit 全量积木仓库 (29 种原语 + 高阶组合子)</span>
           <button class="secondary sm" onclick="toggleCatalog()">展开/收起</button>
         </div>
         <div id="catalogBox" style="display:none;max-height:360px;overflow-y:auto;" class="pipeline-list"></div>
@@ -365,8 +367,24 @@
       </div>
     </div>
 
-    <!-- Right Column: Gantt Chart + Interactive Booking Sandbox + Lifecycle Operations -->
+    <!-- Right Column: Env/Lottery Bar + Gantt Chart + Interactive Booking Sandbox + Lifecycle Operations -->
     <div>
+      <div class="card" style="padding:11px 15px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;">
+            <span>🌦️ <b>实时气象/IoT环境传感器：</b></span>
+            <span class="badge cat-Temporal" id="envBadge">sunny · 风力2级 · AQI 45</span>
+            <button class="secondary sm" onclick="setWeatherPreset('sunny',2,42)">☀️ 晴朗微风</button>
+            <button class="danger sm" onclick="setWeatherPreset('rainstorm',5,35)">⛈️ 暴雨预警(室内补贴)</button>
+            <button class="warn sm" onclick="setWeatherPreset('cloudy_windy',8,65)">🌪️ 8级大风</button>
+            <button class="warn sm" onclick="setWeatherPreset('haze',2,260)">🌫️ 重度雾霾(AQI 260)</button>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="purple sm" onclick="runLotteryDraw()">🎲 执行公证摇号开奖</button>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-title">
           <span>📊 资源排期可视化甘特图 (含前后置缓冲窗与多态占用)</span>
@@ -434,7 +452,8 @@
         </div>
 
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <button onclick="submitBooking()">立即提交预约并透视积木流水线</button>
+          <button onclick="submitBooking(false)">立即提交预约并透视流水线</button>
+          <button class="purple" onclick="submitBooking(true)">🧪 零副作用沙盒预演 (Dry-Run)</button>
           <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:5px;">
             <input type="checkbox" id="waitlistCheck" checked /> 满员时自动进入优先级候补队列
           </label>
@@ -708,14 +727,20 @@ async function loadState() {
     <div class="stat-card">
       <div class="label">活跃确认 / 候补 / 锁座</div>
       <div class="val">${bySt.CONFIRMED || 0} <span style="font-size:13px;color:var(--amber);">/ 候补 ${bySt.WAITLISTED || 0} / 锁座 ${bySt.PENDING_PAYMENT || 0}</span></div>
-      <div class="sub">待审批: ${bySt.PENDING_APPROVAL || 0} · 已完结: ${bySt.COMPLETED || 0}</div>
+      <div class="sub">摇号池: ${bySt.LOTTERY_PENDING || 0} · 待审批: ${bySt.PENDING_APPROVAL || 0} · 已完结: ${bySt.COMPLETED || 0}</div>
     </div>
     <div class="stat-card">
       <div class="label">净营收 & 优惠减免总额</div>
       <div class="val">¥${Number(s.net_revenue || 0).toFixed(2)}</div>
-      <div class="sub">已核销优惠立减: ¥${Number(s.total_discounts || 0).toFixed(2)}</div>
+      <div class="sub">已核销优惠/次卡立减: ¥${Number(s.total_discounts || 0).toFixed(2)}</div>
     </div>
   `;
+
+  const env = data.environment || {};
+  const envBadge = document.getElementById('envBadge');
+  if (envBadge) {
+    envBadge.textContent = `${env.weather || 'sunny'} · 风力${env.wind_level ?? 2}级 · AQI ${env.aqi ?? 45}`;
+  }
 
   const actSel = document.getElementById('actorSelect');
   const prevAct = actSel.value;
@@ -742,7 +767,8 @@ async function loadState() {
         <span class="badge ${r.status === 'ACTIVE' ? 'cat-Pricing' : 'cat-Workflow'}">${r.status}</span>
       </div>
       <div style="font-size:11.5px;color:var(--muted);margin:4px 0;">
-        ID: ${r.id} · 容量: ${r.capacity} · 类别: ${r.kind}<br/>
+        ID: ${r.id} · 容量: ${r.capacity} · 类别: ${r.kind}
+        ${r.parent_id ? `<br/><span style="color:var(--pink);">↳ 父级空间: ${r.parent_id}</span>` : ''}<br/>
         标签: ${(r.tags || []).map(t => '#' + t).join(' ') || '无'}
       </div>
       <div style="margin-top:7px;">
@@ -793,9 +819,11 @@ async function loadState() {
         actions.push(`<button class="secondary sm" onclick="openTransferModal('${b.id}','${b.actor_id}')">转赠</button>`);
       }
       if (b.status === 'CHECKED_IN' || b.status === 'CONFIRMED') {
+        actions.push(`<button class="secondary sm" onclick="extendBooking('${b.id}','${b.actor_id}')">+续时60m</button>`);
         actions.push(`<button class="warn sm" onclick="openCheckoutModal('${b.id}','${b.actor_id}','${b.end_time}')">签退结算</button>`);
+        actions.push(`<button class="secondary sm" onclick="downloadIcs('${b.id}')">📅 .ics</button>`);
       }
-      if (['CONFIRMED', 'WAITLISTED', 'PENDING_APPROVAL', 'PENDING_PAYMENT'].includes(b.status)) {
+      if (['CONFIRMED', 'WAITLISTED', 'PENDING_APPROVAL', 'PENDING_PAYMENT', 'LOTTERY_PENDING'].includes(b.status)) {
         actions.push(`<button class="danger sm" onclick="cancelBooking('${b.id}','${b.actor_id}')">取消</button>`);
       }
 
@@ -846,7 +874,7 @@ function renderTrace(res) {
   `;
 }
 
-async function submitBooking() {
+async function submitBooking(isDryRun = false) {
   const rids = [document.getElementById('resSelect').value];
   const r2 = document.getElementById('resSelect2').value;
   if (r2 && r2 !== rids[0]) rids.push(r2);
@@ -861,14 +889,44 @@ async function submitBooking() {
     hold_ttl_minutes: Number(document.getElementById('holdTtlInput').value || 0),
     now: document.getElementById('nowInput').value,
     allow_waitlist: document.getElementById('waitlistCheck').checked,
-    occurrences: Number(document.getElementById('occInput').value || 1),
+    occurrences: isDryRun ? 1 : Number(document.getElementById('occInput').value || 1),
     interval_days: 7
   };
 
-  const res = await api('/api/book', 'POST', payload);
+  const res = await api(isDryRun ? '/api/simulate' : '/api/book', 'POST', payload);
+  renderTrace(res);
+  if (isDryRun) {
+    showToast('🧪 沙盒零副作用预演完成，未写入任何真实订单或扣减卡次');
+  } else {
+    await loadState();
+    await loadTimeline();
+  }
+}
+
+async function setWeatherPreset(weather, wind_level, aqi) {
+  await api('/api/environment', 'POST', { weather, wind_level, aqi });
+  showToast(`🌦️ 实时环境已切换为: ${weather} | 风力 ${wind_level}级 | AQI ${aqi}`);
+  await loadState();
+}
+
+async function runLotteryDraw() {
+  const res = await api('/api/lottery/draw', 'POST', { resource_id: '', now: document.getElementById('nowInput').value });
+  showToast(`🎲 公证摇号完成 (种子=${res.seed_used})：中签 ${res.winners_count} 单，未中签自动退卡 ${res.losers_count} 单`);
+  await loadState();
+  await loadTimeline();
+}
+
+async function extendBooking(id, actorId) {
+  const now = document.getElementById('nowInput').value;
+  const res = await api('/api/bookings/extend', 'POST', { booking_id: id, actor_id: actorId, extra_minutes: 60, now });
+  showToast(res.ok ? `⏱️ 订单 ${id} 无缝续时 +60 分钟成功` : `⛔ 续时拦截: ${res.message}`);
   renderTrace(res);
   await loadState();
   await loadTimeline();
+}
+
+function downloadIcs(bookingId) {
+  window.open('/api/export/ics?booking_id=' + encodeURIComponent(bookingId), '_blank');
 }
 
 async function payBooking(id, actorId) {

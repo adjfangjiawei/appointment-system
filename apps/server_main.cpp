@@ -83,6 +83,28 @@ void seed_demo_bookings_for_blueprint(AppointmentEngine& eng, const std::string&
         r1.coupon_code = "SPORT30";
         r1.now_override = time_utils::must_parse_datetime("2026-11-09 12:00");
         eng.book(r1);
+    } else if (bp_id == "divisible_convention_center") {
+        BookingRequest r1;
+        r1.actor_id = "org_corp_a";
+        r1.resource_ids = {"HALL-NORTH"};
+        r1.start_time = time_utils::must_parse_datetime("2026-11-10 09:00");
+        r1.end_time = time_utils::must_parse_datetime("2026-11-10 12:00");
+        r1.units = 180;
+        r1.now_override = time_utils::must_parse_datetime("2026-11-09 10:00");
+        eng.book(r1);
+    } else if (bp_id == "municipal_tennis_lottery") {
+        // Seed two Saturday lottery entries on 2026-11-14 (Saturday) 10:00-11:00
+        BookingRequest r1;
+        r1.actor_id = "cit_pass_holder";
+        r1.resource_ids = {"TNS-CLAY-OUT1"};
+        r1.start_time = time_utils::must_parse_datetime("2026-11-14 10:00");
+        r1.end_time = time_utils::must_parse_datetime("2026-11-14 11:00");
+        r1.now_override = time_utils::must_parse_datetime("2026-11-10 09:00");
+        eng.book(r1);
+
+        BookingRequest r2 = r1;
+        r2.actor_id = "cit_honor";
+        eng.book(r2);
     }
 }
 
@@ -303,12 +325,56 @@ int main(int argc, char** argv) {
 
         return HttpResponse::json(JsonValue::object({
             {"stats", engine.stats_summary()},
+            {"environment", meta_to_json(engine.get_environment())},
             {"resources", std::move(res_arr)},
             {"actors", std::move(act_arr)},
             {"bookings", std::move(bk_arr)},
             {"events", std::move(ev_arr)},
             {"lua_logs", std::move(log_arr)}
         }));
+    });
+
+    server.route("GET", "/api/environment", [&engine](const HttpRequest&) -> HttpResponse {
+        return HttpResponse::json(JsonValue::object({
+            {"ok", true},
+            {"environment", meta_to_json(engine.get_environment())}
+        }));
+    });
+
+    server.route("POST", "/api/environment", [&engine](const HttpRequest& req) -> HttpResponse {
+        auto body = req.json();
+        engine.set_environment(json_to_meta(body));
+        return HttpResponse::json(JsonValue::object({
+            {"ok", true},
+            {"environment", meta_to_json(engine.get_environment())}
+        }));
+    });
+
+    server.route("POST", "/api/simulate", [&engine](const HttpRequest& req) -> HttpResponse {
+        auto body = req.json();
+        auto st = opt_parse_dt(body, "start_time");
+        auto et = opt_parse_dt(body, "end_time");
+        if (!st || !et) {
+            return HttpResponse::json(JsonValue::object({{"ok", false}, {"message", "start_time / end_time 时间格式应为 YYYY-MM-DD HH:MM"}}), 400);
+        }
+        BookingRequest breq;
+        breq.actor_id = body["actor_id"].as_string();
+        if (body.contains("resource_ids") && body["resource_ids"].is_array()) {
+            for (const auto& v : body["resource_ids"].as_array()) breq.resource_ids.push_back(v.as_string());
+        } else if (body.contains("resource_id")) {
+            breq.resource_ids.push_back(body["resource_id"].as_string());
+        }
+        breq.start_time = *st;
+        breq.end_time = *et;
+        breq.units = static_cast<int>(body["units"].as_int(1));
+        breq.allow_waitlist = body["allow_waitlist"].as_bool(true);
+        breq.coupon_code = body["coupon_code"].as_string();
+        breq.hold_ttl_minutes = static_cast<int>(body["hold_ttl_minutes"].as_int(0));
+        breq.now_override = opt_parse_dt(body, "now");
+        if (body.contains("metadata") && body["metadata"].is_object()) {
+            breq.metadata = json_to_meta(body["metadata"]);
+        }
+        return HttpResponse::json(engine.simulate_book(breq).to_json());
     });
 
     server.route("POST", "/api/book", [&engine](const HttpRequest& req) -> HttpResponse {
@@ -434,6 +500,40 @@ int main(int argc, char** argv) {
         return HttpResponse::json(out.to_json());
     });
 
+    server.route("POST", "/api/bookings/extend", [&engine](const HttpRequest& req) -> HttpResponse {
+        auto body = req.json();
+        auto out = engine.extend_booking(
+            body["booking_id"].as_string(),
+            body["actor_id"].as_string(),
+            static_cast<int>(body["extra_minutes"].as_int(60)),
+            opt_parse_dt(body, "now"));
+        return HttpResponse::json(out.to_json());
+    });
+
+    server.route("POST", "/api/lottery/draw", [&engine](const HttpRequest& req) -> HttpResponse {
+        auto body = req.json();
+        auto out = engine.draw_lottery(
+            body["resource_id"].as_string(),
+            opt_parse_dt(body, "now"),
+            static_cast<uint64_t>(body["seed"].as_int(0)));
+        return HttpResponse::json(out.to_json());
+    });
+
+    server.route("GET", "/api/export/ics", [&engine](const HttpRequest& req) -> HttpResponse {
+        std::string ics;
+        auto it_b = req.query.find("booking_id");
+        auto it_a = req.query.find("actor_id");
+        if (it_b != req.query.end() && !it_b->second.empty()) {
+            ics = engine.export_booking_ics(it_b->second);
+        } else if (it_a != req.query.end() && !it_a->second.empty()) {
+            ics = engine.export_actor_ics(it_a->second);
+        }
+        if (ics.empty()) {
+            return {404, "text/plain; charset=utf-8", "Booking or actor schedule not found"};
+        }
+        return {200, "text/calendar; charset=utf-8", std::move(ics)};
+    });
+
     server.route("POST", "/api/bookings/complete", [&engine](const HttpRequest& req) -> HttpResponse {
         auto body = req.json();
         auto out = engine.complete_booking(body["booking_id"].as_string(), opt_parse_dt(body, "now"));
@@ -496,7 +596,7 @@ int main(int argc, char** argv) {
     });
 
     std::cout << "====================================================================\n"
-              << "  ChronoKit Studio v3.0 (C++20 + Lua 5.4 Composable Engine)\n"
+              << "  ChronoKit Studio v4.0 (C++20 + Lua 5.4 Composable Engine)\n"
               << "  Listening on http://0.0.0.0:" << port << "\n"
               << "  Active Blueprint: " << engine.current_blueprint_info().name << "\n"
               << "  Storage Backend : " << storage->backend_name() << "\n"

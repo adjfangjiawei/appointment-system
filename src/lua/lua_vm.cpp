@@ -1,6 +1,7 @@
 #include "chronokit/lua/lua_vm.hpp"
 #include "chronokit/bricks/builtin_bricks.hpp"
 #include "chronokit/bricks/v3_bricks.hpp"
+#include "chronokit/bricks/v4_bricks.hpp"
 #include "chronokit/lua/lua_brick.hpp"
 
 extern "C" {
@@ -174,9 +175,147 @@ void LuaVM::init_sandbox_and_dsl() {
             end
         }
 
+        function Mixin(spec)
+            spec = spec or {}
+            spec._is_mixin = true
+            return spec
+        end
+
+        MixinCatalog = {
+            -- 标准工作日朝九晚六时间基座 Mixin
+            StandardBusinessHours = Mixin {
+                bricks = {
+                    Brick.OpeningHours { open_time = "08:30", close_time = "21:30", weekdays = {1,2,3,4,5,6,7} },
+                    Brick.SlotGranularity { align_minutes = 60, min_duration_minutes = 60, max_duration_minutes = 480 },
+                }
+            },
+
+            -- 企业级容灾与自动候补闭环 Mixin
+            EnterpriseReliability = Mixin {
+                fault_policy = { auto_reallocate = true, match_same_tags = true, compensate_priority = 35 },
+                bricks = {
+                    Brick.Waitlist { enabled = true, max_waitlist_per_slot = 8, auto_promote_on_cancel = true },
+                    Brick.ConflictAndCapacity { allow_actor_overlap = false, route_full_to_waitlist = true, exclusive = true },
+                    Brick.CancellationAndCheckIn {
+                        free_cancel_before_minutes = 120,
+                        late_cancel_fee_ratio = 0.25,
+                        check_in_earliest_before_minutes = 30,
+                        check_in_grace_after_minutes = 20,
+                    },
+                }
+            },
+
+            -- 公共体育/场馆全天候防黄牛基础包 Mixin
+            PublicVenueBase = Mixin {
+                fault_policy = { auto_reallocate = true, match_same_tags = false, compensate_priority = 40 },
+                bricks = {
+                    Brick.OpeningHours { open_time = "07:00", close_time = "22:00", weekdays = {1,2,3,4,5,6,7} },
+                    Brick.SlotGranularity { align_minutes = 60, min_duration_minutes = 60, max_duration_minutes = 120 },
+                    Brick.Waitlist { enabled = true, max_waitlist_per_slot = 10, auto_promote_on_cancel = true },
+                    Brick.ConflictAndCapacity { allow_actor_overlap = false, route_full_to_waitlist = true, exclusive = true },
+                    Brick.CancellationAndCheckIn {
+                        free_cancel_before_minutes = 180,
+                        late_cancel_fee_ratio = 0.2,
+                        check_in_earliest_before_minutes = 20,
+                        check_in_grace_after_minutes = 15,
+                    },
+                }
+            }
+        }
+
+        local function _brick_key(b)
+            if type(b) ~= "table" then return "" end
+            return b.name or b._brick_type or b.type or ""
+        end
+
         function Blueprint(spec)
             spec = spec or {}
             spec._is_blueprint = true
+
+            if type(spec.mixins) == "table" and #spec.mixins > 0 then
+                local excluded = {}
+                if type(spec.exclude_bricks) == "table" then
+                    for _, k in ipairs(spec.exclude_bricks) do excluded[k] = true end
+                end
+
+                local child_brick_keys = {}
+                for _, b in ipairs(spec.bricks or {}) do
+                    local k = _brick_key(b)
+                    if k ~= "" then child_brick_keys[k] = true end
+                end
+
+                local merged_bricks = {}
+                local seen_mixin_bricks = {}
+                local merged_fp = {}
+                local merged_res = {}
+                local seen_res = {}
+                local merged_act = {}
+                local seen_act = {}
+                local merged_hooks = {}
+
+                for _, m in ipairs(spec.mixins) do
+                    if type(m) == "table" then
+                        if type(m.fault_policy) == "table" then
+                            for fk, fv in pairs(m.fault_policy) do merged_fp[fk] = fv end
+                        end
+                        for _, b in ipairs(m.bricks or {}) do
+                            local k = _brick_key(b)
+                            if not excluded[k] and not excluded[b._brick_type or ""] and not child_brick_keys[k] then
+                                if seen_mixin_bricks[k] then
+                                    merged_bricks[seen_mixin_bricks[k]] = b
+                                else
+                                    table.insert(merged_bricks, b)
+                                    if k ~= "" then seen_mixin_bricks[k] = #merged_bricks end
+                                end
+                            end
+                        end
+                        for _, r in ipairs(m.resources or {}) do
+                            if r.id and not seen_res[r.id] then
+                                table.insert(merged_res, r)
+                                seen_res[r.id] = #merged_res
+                            end
+                        end
+                        for _, a in ipairs(m.actors or {}) do
+                            if a.id and not seen_act[a.id] then
+                                table.insert(merged_act, a)
+                                seen_act[a.id] = #merged_act
+                            end
+                        end
+                        if type(m.hooks) == "table" then
+                            for hk, hv in pairs(m.hooks) do merged_hooks[hk] = hv end
+                        end
+                    end
+                end
+
+                for _, b in ipairs(spec.bricks or {}) do
+                    local k = _brick_key(b)
+                    if not excluded[k] then table.insert(merged_bricks, b) end
+                end
+                spec.bricks = merged_bricks
+
+                if type(spec.fault_policy) == "table" then
+                    for fk, fv in pairs(spec.fault_policy) do merged_fp[fk] = fv end
+                end
+                if next(merged_fp) ~= nil then spec.fault_policy = merged_fp end
+
+                for _, r in ipairs(spec.resources or {}) do
+                    if r.id and seen_res[r.id] then merged_res[seen_res[r.id]] = r
+                    else table.insert(merged_res, r) end
+                end
+                spec.resources = merged_res
+
+                for _, a in ipairs(spec.actors or {}) do
+                    if a.id and seen_act[a.id] then merged_act[seen_act[a.id]] = a
+                    else table.insert(merged_act, a) end
+                end
+                spec.actors = merged_act
+
+                if type(spec.hooks) == "table" then
+                    for hk, hv in pairs(spec.hooks) do merged_hooks[hk] = hv end
+                end
+                if next(merged_hooks) ~= nil then spec.hooks = merged_hooks end
+            end
+
             return spec
         end
     )LUA";
@@ -318,6 +457,20 @@ BrickPtr LuaVM::parse_single_brick(int brick_tbl_idx) {
         lua_pop(L_, 1);
 
         return std::make_shared<WhenBrick>(name, ord, cond, std::move(then_b), std::move(else_b));
+    }
+
+    // 1b. Recursive Higher-Order Combinator: Brick.Unless
+    if (b_type == "Unless") {
+        std::string name = b_cfg["name"].as_string("ExemptionGuard");
+        int ord = static_cast<int>(b_cfg["order"].as_int(45));
+        JsonValue cond = b_cfg.contains("condition") ? b_cfg["condition"] : b_cfg;
+
+        BrickPtr inner_b;
+        lua_getfield(L_, b_idx, "brick");
+        if (lua_istable(L_, -1)) inner_b = parse_single_brick(lua_gettop(L_));
+        lua_pop(L_, 1);
+
+        return std::make_shared<UnlessBrick>(name, ord, cond, std::move(inner_b));
     }
 
     // 2. Recursive Higher-Order Combinators: Brick.AnyOf / Brick.AllOf

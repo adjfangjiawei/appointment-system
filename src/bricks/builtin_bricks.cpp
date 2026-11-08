@@ -1,5 +1,6 @@
 #include "chronokit/bricks/builtin_bricks.hpp"
 #include "chronokit/bricks/v3_bricks.hpp"
+#include "chronokit/bricks/v4_bricks.hpp"
 #include "chronokit/core/timeline_index.hpp"
 
 #include <algorithm>
@@ -758,6 +759,10 @@ BrickVerdict ConflictAndCapacityBrick::on_pre_book(BookingContext& ctx) {
         }
     }
 
+    if (ctx.bypass_capacity_lock && ctx.target_state == BookingState::LOTTERY_PENDING) {
+        return BrickVerdict::pass("公证摇号池模式就绪 (待统一抽签分配物理容量)");
+    }
+
     for (size_t i = 0; i < ctx.resources.size(); ++i) {
         const auto& res = ctx.resources[i];
         int req_units = (i == 0) ? ctx.request.units : 1;
@@ -981,6 +986,7 @@ BrickRegistry::BrickRegistry() {
     register_brick("ApprovalWorkflow", [](const JsonValue& c) { return std::make_shared<ApprovalWorkflowBrick>(c); });
     register_brick("CancellationAndCheckIn", [](const JsonValue& c) { return std::make_shared<CancellationAndCheckInBrick>(c); });
     register_v3_bricks(*this);
+    register_v4_bricks(*this);
 }
 
 BrickRegistry& BrickRegistry::instance() {

@@ -222,6 +222,47 @@ void run_showcase() {
     auto pro_out = engine.book(pro_req);
     print_outcome("高信用球友通过 Brick.AnyOf 或门解锁赛事中心场 + 15分钟锁座 + SPORT30满减券", pro_out);
     print_outcome("完成锁座支付转正 (PENDING_PAYMENT -> CONFIRMED)", engine.confirm_payment(pro_out.record.id, "plr_veteran", sim_now));
+
+    // v4.0 Showcase: 09 Divisible Convention Center + 10 Municipal Tennis Lottery & Weather Sensor
+    std::cout << "\n====================================================================\n"
+              << "  [v4.0 新增场景] 09 会展中心三级空间父子互斥+音控排班 & 10 网球中心气象熔断+公证摇号\n"
+              << "====================================================================\n";
+
+    engine.load_blueprint_file("blueprints/09_divisible_convention_center.lua");
+    auto s1_out = engine.book({"org_chamber", {"ROOM-VIP-S1"},
+        time_utils::must_parse_datetime("2026-11-10 09:00"),
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        50, false, sim_now});
+    print_outcome("预订三级子厅 ROOM-VIP-S1 (Mixin继承 + 自动指派空闲音控师)", s1_out);
+    print_outcome("同刻尝试整包祖父级全场大宴会厅 HALL-GRAND (被 HierarchicalTreeLock 拓扑互斥锁拦截)",
+        engine.book({"org_summit", {"HALL-GRAND"},
+            time_utils::must_parse_datetime("2026-11-10 09:00"),
+            time_utils::must_parse_datetime("2026-11-10 10:00"),
+            400, false, sim_now}));
+
+    engine.load_blueprint_file("blueprints/10_municipal_outdoor_tennis_lottery.lua");
+    engine.set_environment({{"weather", std::string("rainstorm")}, {"wind_level", int64_t(5)}, {"aqi", int64_t(35)}});
+    print_outcome("暴雨预警下预约室外红土网球场 (被 EnvironmentalRule 气象安全熔断拦截)",
+        engine.book({"cit_cash", {"TNS-CLAY-OUT1"},
+            time_utils::must_parse_datetime("2026-11-11 10:00"),
+            time_utils::must_parse_datetime("2026-11-11 11:00"),
+            2, false, sim_now}));
+    print_outcome("暴雨预警下改约全天候室内气膜馆 (自动放行并触发 Lua 雨天惠民运动补贴 -¥20)",
+        engine.book({"cit_cash", {"TNS-DOME-IN1"},
+            time_utils::must_parse_datetime("2026-11-11 10:00"),
+            time_utils::must_parse_datetime("2026-11-11 11:00"),
+            2, false, sim_now}));
+
+    engine.set_environment({{"weather", std::string("sunny")}, {"wind_level", int64_t(2)}, {"aqi", int64_t(42)}});
+    EpochMinute sat_s = time_utils::must_parse_datetime("2026-11-14 10:00");
+    EpochMinute sat_e = time_utils::must_parse_datetime("2026-11-14 11:00");
+    print_outcome("周六热门红土场公证摇号申购 #1 (次卡自动核销 1 点免现金)",
+        engine.book({"cit_pass_holder", {"TNS-CLAY-OUT1"}, sat_s, sat_e, 2, true, sim_now}));
+    print_outcome("周六热门红土场公证摇号申购 #2 (五星守约市民高权重入池)",
+        engine.book({"cit_honor", {"TNS-CLAY-OUT1"}, sat_s, sat_e, 2, true, sim_now}));
+    auto draw = engine.draw_lottery("TNS-CLAY-OUT1", sim_now, 20261114ULL);
+    std::cout << "  >> [公证摇号开奖 seed=" << draw.seed_used << "] 中签单号: " << draw.winners[0]
+              << " | 未中签自动原路退回次卡单号: " << draw.losers[0] << "\n";
 }
 
 } // namespace

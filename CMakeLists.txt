@@ -81,10 +81,12 @@ add_library(chronokit STATIC
     src/core/json.cpp
     src/core/time_utils.cpp
     src/core/timeline_index.cpp
+    src/core/c_api.cpp
     src/storage/memory_storage.cpp
     src/storage/sqlite_storage.cpp
     src/bricks/builtin_bricks.cpp
     src/bricks/v3_bricks.cpp
+    src/bricks/v4_bricks.cpp
     src/lua/lua_vm.cpp
     src/lua/lua_brick.cpp
     src/engine/appointment_engine.cpp

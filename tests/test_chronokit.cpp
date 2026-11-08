@@ -1,3 +1,4 @@
+#include "chronokit/c_api.h"
 #include "chronokit/engine/appointment_engine.hpp"
 #include "chronokit/storage/sqlite_storage.hpp"
 
@@ -526,6 +527,173 @@ void test_blueprint_08_anyof_hold_reschedule_transfer_checkout_and_cpp_export() 
     CHECK(cpp_src.find("CouponAndVoucher") != std::string::npos);
 }
 
+void test_blueprint_09_mixin_hierarchy_staff_and_extension() {
+    std::cout << "Running test_blueprint_09_mixin_hierarchy_staff_and_extension...\n";
+    AppointmentEngine eng;
+    eng.load_blueprint_file("blueprints/09_divisible_convention_center.lua", true);
+
+    // 1. Mixin inheritance verification: pipeline inherited OpeningHours, SlotGranularity, Waitlist, ConflictAndCapacity, CancellationAndCheckIn
+    auto pipe = eng.describe_pipeline();
+    CHECK(pipe.size() == 10);
+
+    // 2. Book Level-3 sub-room ROOM-VIP-S1 (child of HALL-SOUTH, grandchild of HALL-GRAND) 09:00-10:00:
+    //    - Automatically assigns companion staff (STAFF-AV-01 or STAFF-AV-02)!
+    BookingRequest r_s1{"org_chamber", {"ROOM-VIP-S1"},
+        time_utils::must_parse_datetime("2026-11-10 09:00"),
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        50, false, time_utils::must_parse_datetime("2026-11-09 10:00")};
+    auto o_s1 = eng.book(r_s1);
+    CHECK(o_s1.ok && o_s1.record.status == BookingState::CONFIRMED);
+    CHECK(o_s1.record.resource_ids.size() == 2); // ROOM-VIP-S1 + auto-assigned av_engineer!
+
+    // 3. Parent HALL-SOUTH and Grandparent HALL-GRAND must BOTH be blocked at 09:00-10:00 by HierarchicalTreeLockBrick!
+    BookingRequest r_south{"org_corp_a", {"HALL-SOUTH"},
+        time_utils::must_parse_datetime("2026-11-10 09:00"),
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        150, false, time_utils::must_parse_datetime("2026-11-09 10:05")};
+    auto o_south_blk = eng.book(r_south);
+    CHECK(!o_south_blk.ok && o_south_blk.error_code == "HIERARCHY_TOPOLOGY_CONFLICT");
+
+    BookingRequest r_grand{"org_summit", {"HALL-GRAND"},
+        time_utils::must_parse_datetime("2026-11-10 09:00"),
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        400, false, time_utils::must_parse_datetime("2026-11-09 10:05")};
+    auto o_grand_blk = eng.book(r_grand);
+    CHECK(!o_grand_blk.ok && o_grand_blk.error_code == "HIERARCHY_TOPOLOGY_CONFLICT");
+
+    // 4. Sibling wing HALL-NORTH is independent and succeeds in parallel (getting the 2nd free AV engineer)!
+    BookingRequest r_north{"org_corp_a", {"HALL-NORTH"},
+        time_utils::must_parse_datetime("2026-11-10 09:00"),
+        time_utils::must_parse_datetime("2026-11-10 10:00"),
+        150, false, time_utils::must_parse_datetime("2026-11-09 10:10")};
+    auto o_north = eng.book(r_north);
+    CHECK(o_north.ok && o_north.record.resource_ids.size() == 2);
+    CHECK(o_north.record.resource_ids[1] != o_s1.record.resource_ids[1]); // Assigned the other free engineer!
+
+    // 5. Book HALL-GRAND (#intl_summit) for 6 hours (13:00-19:00):
+    //    - PriceGuard caps hall base price ($3000 * 6h * 0.85 = $15,300 -> capped to $12,000),
+    //      then CompanionStaffAssigner assigns STAFF-AV-01 (#simultaneous_interp, +$300*6h = +$1,800 -> $13,800)!
+    BookingRequest r_summit{"org_summit", {"HALL-GRAND"},
+        time_utils::must_parse_datetime("2026-11-10 13:00"),
+        time_utils::must_parse_datetime("2026-11-10 19:00"),
+        500, false, time_utils::must_parse_datetime("2026-11-09 10:20")};
+    auto o_summit = eng.book(r_summit);
+    CHECK(o_summit.ok);
+    CHECK(o_summit.record.resource_ids.size() == 2 && o_summit.record.resource_ids[1] == "STAFF-AV-01");
+    CHECK_NEAR(o_summit.record.price, 13800.0, 1e-4);
+
+    // 6. Live In-Session Extension (`extend_booking`): extend o_s1 from 10:00 -> 11:00 (+60m) seamlessly!
+    auto ext_ok = eng.extend_booking(o_s1.record.id, "org_chamber", 60, time_utils::must_parse_datetime("2026-11-10 09:45"));
+    CHECK(ext_ok.ok && ext_ok.record.end_time == time_utils::must_parse_datetime("2026-11-10 11:00"));
+}
+
+void test_blueprint_10_weather_pass_unless_lottery_and_ics() {
+    std::cout << "Running test_blueprint_10_weather_pass_unless_lottery_and_ics...\n";
+    AppointmentEngine eng;
+    eng.load_blueprint_file("blueprints/10_municipal_outdoor_tennis_lottery.lua", true);
+
+    EpochMinute sim_now = time_utils::must_parse_datetime("2026-11-10 08:00");
+
+    // 1. Set Rainstorm -> outdoor clay court blocked, indoor dome open with Lua ¥20 rainy-day subsidy!
+    eng.set_environment({{"weather", std::string("rainstorm")}, {"wind_level", int64_t(5)}, {"aqi", int64_t(35)}});
+    BookingRequest r_out_rain{"cit_cash", {"TNS-CLAY-OUT1"},
+        time_utils::must_parse_datetime("2026-11-11 10:00"),
+        time_utils::must_parse_datetime("2026-11-11 11:00"),
+        2, false, sim_now};
+    auto o_rain_blk = eng.book(r_out_rain);
+    CHECK(!o_rain_blk.ok && o_rain_blk.error_code == "WEATHER_SAFETY_LOCKOUT");
+
+    BookingRequest r_in_rain{"cit_cash", {"TNS-DOME-IN1"},
+        time_utils::must_parse_datetime("2026-11-11 10:00"),
+        time_utils::must_parse_datetime("2026-11-11 11:00"),
+        2, false, sim_now};
+    auto o_in_rain = eng.book(r_in_rain);
+    // base_rate(80) + indoor_dome surcharge(40) = 120, minus rainy-day Lua subsidy(20) = 100!
+    CHECK(o_in_rain.ok && std::abs(o_in_rain.record.price - 100.0) < 1e-4);
+
+    // 2. Restore sunny weather -> test zero-side-effect `simulate_book` with pass holder
+    eng.set_environment({{"weather", std::string("sunny")}, {"wind_level", int64_t(2)}, {"aqi", int64_t(40)}});
+    BookingRequest r_sim{"cit_pass_holder", {"TNS-CLAY-OUT1"},
+        time_utils::must_parse_datetime("2026-11-11 14:00"),
+        time_utils::must_parse_datetime("2026-11-11 16:00"),
+        2, false, sim_now};
+    auto sim_out = eng.simulate_book(r_sim);
+    CHECK(sim_out.ok && sim_out.record.price == 0.0);
+    // Verify zero side effects on actor's pass_credits (still 10)!
+    CHECK(meta_get_int(eng.get_actor("cit_pass_holder")->attributes, "tennis_pass_credits") == 10);
+
+    // 3. Test `Brick.Unless` exemption: `coach_team` (`city_team`) can book 3 slots on the same weekday (exempt from 2/day quota!)
+    for (int i = 0; i < 3; ++i) {
+        BookingRequest rc{"coach_team", {"TNS-HARD-OUT2"},
+            time_utils::must_parse_datetime("2026-11-12 09:00") + i * 120,
+            time_utils::must_parse_datetime("2026-11-12 10:00") + i * 120,
+            2, false, sim_now};
+        CHECK(eng.book(rc).ok);
+    }
+
+    // 4. Weekend Fair Public Lottery + MembershipPass automatic deduction & refund on loss!
+    //    2026-11-14 is Saturday (>= 24h from 2026-11-10): all 3 citizens apply for 10:00-11:00 TNS-CLAY-OUT1!
+    EpochMinute sat_s = time_utils::must_parse_datetime("2026-11-14 10:00");
+    EpochMinute sat_e = time_utils::must_parse_datetime("2026-11-14 11:00");
+
+    auto l1 = eng.book({"cit_pass_holder", {"TNS-CLAY-OUT1"}, sat_s, sat_e, 2, true, sim_now});
+    auto l2 = eng.book({"cit_honor", {"TNS-CLAY-OUT1"}, sat_s, sat_e, 2, true, sim_now});
+    auto l3 = eng.book({"cit_cash", {"TNS-CLAY-OUT1"}, sat_s, sat_e, 2, true, sim_now});
+    CHECK(l1.ok && l1.record.status == BookingState::LOTTERY_PENDING && l1.record.price == 0.0);
+    CHECK(l2.ok && l2.record.status == BookingState::LOTTERY_PENDING && l2.record.price == 0.0);
+    CHECK(l3.ok && l3.record.status == BookingState::LOTTERY_PENDING && l3.record.price > 0.0);
+
+    // Both pass holders had 1 credit pre-deducted upon entering lottery (10->9 and 2->1)
+    CHECK(meta_get_int(eng.get_actor("cit_pass_holder")->attributes, "tennis_pass_credits") == 9);
+    CHECK(meta_get_int(eng.get_actor("cit_honor")->attributes, "tennis_pass_credits") == 1);
+
+    // Run deterministic lottery draw! Exactly 1 winner gets CONFIRMED, 2 losers get LOTTERY_LOST + automatic pass refund!
+    auto draw = eng.draw_lottery("TNS-CLAY-OUT1", time_utils::must_parse_datetime("2026-11-13 12:00"), 20261114ULL);
+    CHECK(draw.winners.size() == 1 && draw.losers.size() == 2);
+    CHECK(eng.get_booking(draw.winners[0])->status == BookingState::CONFIRMED);
+    for (const auto& lid : draw.losers) {
+        auto lb = eng.get_booking(lid);
+        CHECK(lb->status == BookingState::LOTTERY_LOST);
+        if (lb->actor_id == "cit_pass_holder") {
+            CHECK(meta_get_int(eng.get_actor("cit_pass_holder")->attributes, "tennis_pass_credits") == 10);
+        }
+        if (lb->actor_id == "cit_honor") {
+            CHECK(meta_get_int(eng.get_actor("cit_honor")->attributes, "tennis_pass_credits") == 2);
+        }
+    }
+
+    // 5. RFC 5545 .ics export check
+    std::string ics = eng.export_booking_ics(draw.winners[0]);
+    CHECK(ics.find("BEGIN:VCALENDAR") != std::string::npos);
+    CHECK(ics.find("BEGIN:VEVENT") != std::string::npos);
+}
+
+void test_embeddable_c_api_ffi() {
+    std::cout << "Running test_embeddable_c_api_ffi...\n";
+    chronokit_engine_t* c_eng = chronokit_create(nullptr);
+    CHECK(c_eng != nullptr);
+    CHECK(chronokit_load_blueprint_file(c_eng, "blueprints/01_university_lab.lua", 1) == 0);
+
+    char* sim_str = chronokit_simulate_json(c_eng,
+        R"({"actor_id":"res_zhang","resource_id":"GPU-201","start_time":"2026-11-10 20:00","end_time":"2026-11-10 22:00","now":"2026-11-09 10:00"})");
+    JsonValue sim_j = JsonValue::parse(sim_str);
+    chronokit_free_string(sim_str);
+    CHECK(sim_j["ok"].as_bool() == true);
+
+    char* bk_str = chronokit_book_json(c_eng,
+        R"({"actor_id":"res_zhang","resource_id":"GPU-201","start_time":"2026-11-10 20:00","end_time":"2026-11-10 22:00","now":"2026-11-09 10:00"})");
+    JsonValue bk_j = JsonValue::parse(bk_str);
+    chronokit_free_string(bk_str);
+    CHECK(bk_j["ok"].as_bool() == true);
+    std::string bid = bk_j["record"]["id"].as_string();
+
+    char* ics_str = chronokit_export_ics(c_eng, bid.c_str());
+    CHECK(std::string(ics_str).find("UID:" + bid) != std::string::npos);
+    chronokit_free_string(ics_str);
+
+    chronokit_destroy(c_eng);
+}
+
 } // namespace
 
 int main() {
@@ -539,9 +707,12 @@ int main() {
         test_blueprint_06_ev_balancer_surge_and_cooldown();
         test_blueprint_07_gov_prefab_dependency_and_when_combinator();
         test_blueprint_08_anyof_hold_reschedule_transfer_checkout_and_cpp_export();
+        test_blueprint_09_mixin_hierarchy_staff_and_extension();
+        test_blueprint_10_weather_pass_unless_lottery_and_ics();
+        test_embeddable_c_api_ffi();
 
         std::cout << "\n======================================================\n"
-                  << "  ChronoKit v3.0 Test Summary: " << g_passed << " passed, " << g_failed << " failed\n"
+                  << "  ChronoKit v4.0 Test Summary: " << g_passed << " passed, " << g_failed << " failed\n"
                   << "======================================================\n";
         return g_failed == 0 ? 0 : 1;
     } catch (const std::exception& ex) {
